@@ -20,6 +20,32 @@ export type DirectoryListing = {
 
 export type DirectoryInfo = { name: string };
 
+export type ArchiveResponse = { url: string; filename: string };
+export type DeleteResult = { deleted: string[]; failed: { path: string; message: string }[] };
+
+async function postPaths<T>(action: 'archive' | 'delete', paths: string[]): Promise<T> {
+  const response = await fetch(`/api/files/${action}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => null) as { message?: string } | null;
+    throw new Error(error?.message || `操作失败：HTTP ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+export const createArchive = (paths: string[]) => postPaths<ArchiveResponse>('archive', paths);
+export const deleteFiles = (paths: string[]) => postPaths<DeleteResult>('delete', paths);
+
+export function startDownload(url: string, filename: string): void {
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
 export type ConflictMode = 'rename' | 'overwrite';
 
 export type ChatMessage = {

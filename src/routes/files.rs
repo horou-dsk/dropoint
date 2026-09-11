@@ -20,9 +20,14 @@ use tokio_util::io::ReaderStream;
 
 use crate::state::AppState;
 
+pub(crate) mod archive;
+mod batch;
+mod delete;
 mod range;
 mod upload;
 
+pub use archive::{create_archive, download_archive};
+pub use delete::delete_files;
 pub use upload::upload_file;
 
 #[derive(Debug, Deserialize)]
@@ -65,6 +70,8 @@ pub enum FileError {
     NotFound,
     Conflict(String),
     InvalidUpload,
+    InvalidOperation(String),
+    OperationFailed(String),
     Io(std::io::Error),
 }
 
@@ -96,6 +103,14 @@ impl IntoResponse for FileError {
                 StatusCode::BAD_REQUEST,
                 "invalid_upload",
                 "上传内容无效".to_owned(),
+            ),
+            Self::InvalidOperation(message) => {
+                (StatusCode::BAD_REQUEST, "invalid_operation", message)
+            }
+            Self::OperationFailed(message) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "operation_failed",
+                message,
             ),
             Self::Io(error) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

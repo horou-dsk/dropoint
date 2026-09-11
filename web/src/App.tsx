@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   type ConflictMode,
   type DirectoryListing,
@@ -7,15 +7,23 @@ import {
   getDirectoryInfo,
   listFiles,
   uploadFile,
+  createArchive,
+  deleteFiles,
+  fileUrl,
+  startDownload,
 } from './lib/api';
 import { useTheme } from './lib/useTheme';
 import { collectDroppedFiles, filesForUpload, type UploadItem } from './lib/uploads';
 import ChatPanel from './components/ChatPanel';
 import FileBrowser, { type FileView } from './components/FileBrowser';
 import PreviewDialog from './components/PreviewDialog';
+import ContextMenu, { type MenuItem, type MenuPosition } from './components/ContextMenu';
+import DeleteDialog from './components/DeleteDialog';
+import { useFileSelection } from './lib/useFileSelection';
 
 type ConflictChoice = ConflictMode | 'cancel';
 type ConflictPrompt = { path: string; resolve: (choice: ConflictChoice) => void };
+type DirectoryHistoryState = { dropointPath?: string };
 
 export default function App() {
   const [directoryName, setDirectoryName] = useState('共享目录');
@@ -27,36 +35,133 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ConflictPrompt | null>(null);
-  const [fileView, setFileView] = useState<FileView>('list');
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [fileView, setFileView] = useState<FileView>(() => (
+    localStorage.getItem('dropoint-file-view') === 'list' ? 'list' : 'grid'
+  ));
+  const selection = useFileSelection();
+  const { reconcile } = selection;
+  const [sort, setSort] = useState('name-asc');
+  const [menu, setMenu] = useState<{ position: MenuPosition; entries: FileEntry[] } | null>(null);
+  const [deleteTargets, setDeleteTargets] = useState<FileEntry[] | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [packing, setPacking] = useState(false);
+  const [operation, setOperation] = useState<{ error: boolean; text: string } | null>(null);
   const [mobilePanel, setMobilePanel] = useState<'files' | 'chat'>('files');
   const { theme, toggleTheme } = useTheme();
   const fileInput = useRef<HTMLInputElement>(null);
+  const currentPath = useRef('');
+  const directoryRequest = useRef(0);
+  const deletePending = useRef(false);
 
-  const loadDirectory = useCallback(async (nextPath: string) => {
+  useEffect(() => {
+    localStorage.setItem('dropoint-file-view', fileView);
+  }, [fileView]);
+
+  const loadDirectory = useCallback(async (nextPath: string, historyMode: 'push' | 'none' = 'none') => {
+    const request = ++directoryRequest.current;
+    const previousPath = currentPath.current;
     setLoading(true);
     setError(null);
     try {
       const result = await listFiles(nextPath);
+      if (request !== directoryRequest.current) return;
       setListing(result);
       setPath(result.path);
-      setSelectedPath(null);
+      currentPath.current = result.path;
+      if (historyMode === 'push' && result.path !== previousPath) {
+        window.history.pushState(
+          { ...(window.history.state as DirectoryHistoryState | null), dropointPath: result.path },
+          '',
+          window.location.href,
+        );
+      }
+      reconcile(result.path, result.entries);
+      setMenu(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '读取目录失败');
+      if (request === directoryRequest.current) setError(cause instanceof Error ? cause.message : '读取目录失败');
     } finally {
-      setLoading(false);
+      if (request === directoryRequest.current) setLoading(false);
     }
-  }, []);
+  }, [reconcile]);
+
+  const entries = useMemo(() => [...(listing?.entries ?? [])].sort((left, right) => {
+    const directoryFirst = Number(left.kind === 'file') - Number(right.kind === 'file');
+    if (directoryFirst !== 0) return directoryFirst;
+    const byName = left.name.localeCompare(right.name, undefined, { numeric: true });
+    if (sort === 'name-desc') return -byName;
+    if (sort === 'modified-desc') return (right.modified ?? 0) - (left.modified ?? 0) || byName;
+    if (sort === 'size-desc') return right.size - left.size || byName;
+    return byName;
+  }), [listing, sort]);
+  const selectedEntries = entries.filter((entry) => selection.paths.has(entry.path));
+  const closeMenu = useCallback(() => setMenu(null), []);
+  const selectAll = () => selection.replace(entries.map((entry) => entry.path));
+
+  const downloadEntries = async (targets: FileEntry[]) => {
+    if (!targets.length || packing) return;
+    setOperation(null);
+    if (targets.length === 1 && targets[0].kind === 'file') {
+      startDownload(fileUrl(targets[0].path, 'download'), targets[0].name);
+      setOperation({ error: false, text: '已开始下载' });
+      return;
+    }
+    setPacking(true);
+    try {
+      const archive = await createArchive(targets.map((entry) => entry.path));
+      startDownload(archive.url, archive.filename);
+      setOperation({ error: false, text: 'ZIP 已开始下载' });
+    } catch (cause) {
+      setOperation({ error: true, text: cause instanceof Error ? cause.message : '打包失败，请重试' });
+    } finally { setPacking(false); }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTargets || deletePending.current) return;
+    deletePending.current = true;
+    setDeleting(true);
+    setOperation(null);
+    try {
+      const result = await deleteFiles(deleteTargets.map((entry) => entry.path));
+      selection.remove(result.deleted);
+      setPreview((entry) => entry && result.deleted.some((deleted) => entry.path === deleted || entry.path.startsWith(`${deleted}/`)) ? null : entry);
+      await loadDirectory(currentPath.current);
+      setOperation({
+        error: result.failed.length > 0,
+        text: result.failed.length
+          ? `已删除 ${result.deleted.length} 项，${result.failed.length} 项失败：${result.failed.map((item) => `${item.path}：${item.message}`).join('；')}`
+          : `已删除 ${result.deleted.length} 个项目`,
+      });
+    } catch (cause) {
+      setOperation({ error: true, text: cause instanceof Error ? cause.message : '删除失败，请重试' });
+    } finally {
+      deletePending.current = false;
+      setDeleting(false);
+      setDeleteTargets(null);
+    }
+  };
 
   useEffect(() => {
     void getDirectoryInfo().then((info) => setDirectoryName(info.name)).catch(() => undefined);
-    void loadDirectory('');
+    const state = window.history.state as DirectoryHistoryState | null;
+    const initialPath = typeof state?.dropointPath === 'string' ? state.dropointPath : '';
+    if (typeof state?.dropointPath !== 'string') {
+      window.history.replaceState({ ...(state ?? {}), dropointPath: initialPath }, '', window.location.href);
+    }
+    const handlePopState = (event: PopStateEvent) => {
+      const nextState = event.state as DirectoryHistoryState | null;
+      if (typeof nextState?.dropointPath === 'string') {
+        void loadDirectory(nextState.dropointPath);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    void loadDirectory(initialPath);
+    return () => window.removeEventListener('popstate', handlePopState);
   }, [loadDirectory]);
 
   const openEntry = (entry: FileEntry) => {
     if (entry.kind === 'directory') {
       setPreview(null);
-      void loadDirectory(entry.path);
+      void loadDirectory(entry.path, 'push');
     } else {
       setPreview(entry);
     }
@@ -91,6 +196,15 @@ export default function App() {
   };
 
   const breadcrumbs = path ? path.split('/').filter(Boolean) : [];
+  const menuItems: MenuItem[] = menu?.entries.length ? [
+    ...(menu.entries.length === 1 ? [{ label: menu.entries[0].kind === 'directory' ? '打开' : '预览', action: () => openEntry(menu.entries[0]) }] : []),
+    { label: menu.entries.length === 1 ? '下载' : '下载所选项目', action: () => void downloadEntries(menu.entries), disabled: packing || deleting },
+    { label: menu.entries.length === 1 ? '删除' : '删除所选项目', action: () => setDeleteTargets(menu.entries), danger: true, disabled: packing || deleting },
+  ] : [
+    { label: '刷新', action: () => void loadDirectory(path) },
+    { label: '全选', action: selectAll, disabled: entries.length === 0 },
+    { label: '取消选择', action: selection.clear, disabled: selection.paths.size === 0 },
+  ];
   return (
     <main className="flex h-dvh min-h-0 flex-col overflow-hidden bg-canvas p-3 text-ink sm:p-5">
       <div className="mx-auto flex h-full min-h-0 w-full max-w-[1600px] flex-col">
@@ -142,13 +256,13 @@ export default function App() {
             onDrop={(event) => void handleDrop(event)}
           >
             <div className="flex shrink-0 items-center gap-2 border-b border-line bg-surface px-3 py-2">
-              <button className="icon-button" aria-label="返回上级" disabled={!path} onClick={() => void loadDirectory(breadcrumbs.slice(0, -1).join('/'))}>‹</button>
+              <button className="icon-button" aria-label="返回上级" disabled={!path} onClick={() => window.history.back()}>‹</button>
               <nav aria-label="目录路径" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap text-xs text-muted">
-                <button className="rounded px-1 py-1 hover:bg-hover hover:text-ink" onClick={() => void loadDirectory('')}>{directoryName}</button>
+                <button className="rounded px-1 py-1 hover:bg-hover hover:text-ink" onClick={() => void loadDirectory('', 'push')}>{directoryName}</button>
                 {breadcrumbs.map((part, index) => (
                   <span key={index} className="flex items-center gap-1">
                     <span aria-hidden="true">/</span>
-                    <button className="rounded px-1 py-1 hover:bg-hover hover:text-ink" onClick={() => void loadDirectory(breadcrumbs.slice(0, index + 1).join('/'))}>{part}</button>
+                    <button className="rounded px-1 py-1 hover:bg-hover hover:text-ink" onClick={() => void loadDirectory(breadcrumbs.slice(0, index + 1).join('/'), 'push')}>{part}</button>
                   </span>
                 ))}
               </nav>
@@ -175,16 +289,35 @@ export default function App() {
                 </button>
               </div>
             </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-3 py-2">
+              <span className="mr-auto text-xs text-muted">已选中 {selectedEntries.length} 项</span>
+              <select aria-label="文件排序" value={sort} onChange={(event) => setSort(event.target.value)} className="min-w-0 rounded-md border border-line bg-panel px-2 py-1.5 text-xs text-ink">
+                <option value="name-asc">名称 ↑</option><option value="name-desc">名称 ↓</option>
+                <option value="modified-desc">最近修改</option><option value="size-desc">大小 ↓</option>
+              </select>
+              <button className="secondary-button" disabled={!selectedEntries.length || packing || deleting || loading} onClick={() => void downloadEntries(selectedEntries)}>{packing ? '正在打包…' : '下载所选项目'}</button>
+              <button className="secondary-button text-rose-600 dark:text-rose-300" disabled={!selectedEntries.length || packing || deleting || loading} onClick={() => setDeleteTargets(selectedEntries)}>删除所选项目</button>
+            </div>
+            {operation && <p role={operation.error ? 'alert' : 'status'} className={`max-h-24 shrink-0 overflow-y-auto break-all border-b border-line px-3 py-2 text-xs ${operation.error ? 'bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-200' : 'bg-surface text-muted'}`}>{operation.text}</p>}
             {uploading && <p role="status" className="shrink-0 truncate border-b border-line bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-200">{uploading}</p>}
             {error && <p role="alert" className="shrink-0 border-b border-line bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-950 dark:text-rose-200">{error}</p>}
             {loading ? (
               <div role="status" className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted">正在打开目录…</div>
             ) : (
-              <FileBrowser entries={listing?.entries ?? []} view={fileView} selectedPath={selectedPath} onSelect={setSelectedPath} onOpen={openEntry} />
+              <FileBrowser
+                entries={entries} view={fileView} selectedPaths={selection.paths}
+                onSelect={(selected, modifiers) => selection.select(selected, entries, modifiers)}
+                onClear={selection.clear} onSelectAll={selectAll} onOpen={openEntry}
+                onContextMenu={(entry, position) => {
+                  const targets = entry ? selection.paths.has(entry.path) ? selectedEntries : [entry] : [];
+                  if (entry && !selection.paths.has(entry.path)) selection.replace([entry.path]);
+                  setMenu({ position, entries: targets });
+                }}
+              />
             )}
             <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-line bg-surface px-3 py-2 text-[11px] text-muted">
-              <span>{listing?.entries.length ?? 0} 个项目{selectedPath ? ' · 已选中 1 项' : ''}</span>
-              <span className="hidden sm:inline">双击打开 · 拖入文件上传</span>
+              <span>{listing?.entries.length ?? 0} 个项目</span>
+              <span className="hidden sm:inline">双击打开 · Ctrl/⌘ 多选 · Shift 连选</span>
             </footer>
             {dragging && <div className="pointer-events-none absolute inset-2 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-accent bg-panel/95 p-4 text-center text-sm text-accent">松开鼠标，上传文件或文件夹</div>}
           </section>
@@ -194,6 +327,8 @@ export default function App() {
       </div>
 
       {preview && <PreviewDialog key={preview.path} entry={preview} onClose={() => setPreview(null)} />}
+      {menu && <ContextMenu position={menu.position} items={menuItems} onClose={closeMenu} />}
+      {deleteTargets && <DeleteDialog entries={deleteTargets} busy={deleting} onCancel={() => setDeleteTargets(null)} onConfirm={() => void confirmDelete()} />}
       {conflict && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
           <div role="dialog" aria-modal="true" aria-labelledby="conflict-title" className="w-full max-w-md rounded-2xl border border-line bg-panel p-6 text-ink shadow-2xl">

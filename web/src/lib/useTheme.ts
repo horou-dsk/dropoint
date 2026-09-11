@@ -11,8 +11,25 @@ export function useTheme() {
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
-    localStorage.setItem('dropoint-theme', theme);
   }, [theme]);
 
-  return { theme, toggleTheme: () => setTheme((current) => current === 'light' ? 'dark' : 'light') };
+  useEffect(() => {
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)');
+    if (!media) return undefined;
+    const updateFromSystem = (event: MediaQueryListEvent) => {
+      if (!localStorage.getItem('dropoint-theme')) {
+        setTheme(event.matches ? 'dark' : 'light');
+      }
+    };
+    media.addEventListener?.('change', updateFromSystem);
+    return () => media.removeEventListener?.('change', updateFromSystem);
+  }, []);
+
+  const toggleTheme = () => setTheme((current) => {
+    const next = current === 'light' ? 'dark' : 'light';
+    localStorage.setItem('dropoint-theme', next);
+    return next;
+  });
+
+  return { theme, toggleTheme };
 }

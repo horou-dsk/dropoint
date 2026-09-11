@@ -30,6 +30,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   localStorage.clear();
   document.documentElement.classList.remove('dark');
+  window.history.replaceState(null, '', '/');
 });
 
 describe('file workspace', () => {
@@ -77,6 +78,46 @@ describe('file workspace', () => {
     expect(screen.getByRole('button', { name: 'notes.txt' })).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(screen.getByRole('region', { name: '文件内容' }));
     expect(screen.getByRole('button', { name: 'notes.txt' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('defaults to icon view and persists the selected view', async () => {
+    const first = render(<App />);
+    await screen.findByRole('button', { name: 'notes.txt' });
+    expect(screen.getByRole('button', { name: '图标视图' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: '列表视图' }));
+    expect(localStorage.getItem('dropoint-file-view')).toBe('list');
+    first.unmount();
+
+    render(<App />);
+    await screen.findByRole('button', { name: 'notes.txt' });
+    expect(screen.getByRole('button', { name: '列表视图' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('keeps directories before files for every sort direction', async () => {
+    render(<App />);
+    await screen.findByRole('button', { name: 'notes.txt' });
+    fireEvent.click(screen.getByRole('button', { name: '列表视图' }));
+    const list = () => within(screen.getByRole('list', { name: '文件列表' }))
+      .getAllByRole('button').map((button) => button.getAttribute('aria-label'));
+    expect(list()).toEqual(['Documents', 'notes.txt']);
+    fireEvent.change(screen.getByRole('combobox', { name: '文件排序' }), { target: { value: 'name-desc' } });
+    expect(list()).toEqual(['Documents', 'notes.txt']);
+  });
+
+  it('uses browser history for folder navigation and mouse back/forward', async () => {
+    render(<App />);
+    const folderButton = await screen.findByRole('button', { name: 'Documents' });
+    fireEvent.doubleClick(folderButton);
+    await screen.findByText('这个目录还是空的，拖入文件开始分享吧。');
+    expect(window.history.state).toEqual(expect.objectContaining({ dropointPath: 'Documents' }));
+
+    fireEvent.click(screen.getByRole('button', { name: '返回上级' }));
+    await screen.findByRole('button', { name: 'notes.txt' });
+    expect(window.history.state).toEqual(expect.objectContaining({ dropointPath: '' }));
+
+    window.history.forward();
+    await screen.findByText('这个目录还是空的，拖入文件开始分享吧。');
+    expect(window.history.state).toEqual(expect.objectContaining({ dropointPath: 'Documents' }));
   });
 
   it('keeps a closed preview closed when its request finishes later', async () => {

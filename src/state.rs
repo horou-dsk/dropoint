@@ -16,6 +16,7 @@ pub const MAX_CHAT_MESSAGES: usize = 200;
 pub struct AppState {
     pub root: Arc<PathBuf>,
     pub chat: Arc<ChatState>,
+    pub(crate) archives: Arc<crate::routes::files::archive::ArchiveStore>,
 }
 
 impl AppState {
@@ -24,6 +25,7 @@ impl AppState {
         Self {
             root: Arc::new(root),
             chat: Arc::new(ChatState::new()),
+            archives: Arc::default(),
         }
     }
 }
