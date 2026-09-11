@@ -4,10 +4,13 @@
 
 本仓库是名为 `dropoint` 的全栈项目，后端使用 Rust，前端使用 Web 技术。
 
-- `src/main.rs`：Rust 后端可执行程序入口和应用逻辑。
+- `src/main.rs`：Rust 后端启动入口，解析共享目录参数并启动局域网服务。
+- `src/app.rs`、`src/state.rs`：Axum 路由组合和共享应用状态。
+- `src/routes/`：健康检查、文件浏览/上传/下载/预览和 WebSocket 聊天路由。
 - `Cargo.toml`：后端包元数据、Rust 版本和依赖配置。
 - `Cargo.lock`：锁定依赖版本；这是应用项目，应提交到 Git。
 - `web/`：Web 前端独立目录，包含 `package.json`、前端源码、静态资源和前端测试。
+- `web/src/App.tsx`：文件工作台和聊天界面；`web/src/lib/api.ts`：前后端 API 类型与调用。
 - `target/`：构建生成物，已由 Git 忽略。
 
 代码扩展后，将可复用后端模块放在 `src/` 下，并让 `main.rs` 主要负责启动和流程编排。模块默认使用“文件夹同名 `.rs` 文件”布局，例如 `src/parser.rs` 对应 `src/parser/`；除非有明确兼容性或组织需求，不要使用文件夹内的 `mod.rs`。前端代码只放在 `web/`，不要把前端依赖或构建产物混入 Rust 目录。单元测试可使用 `#[cfg(test)]` 放在实现文件旁；后端集成测试放入 `tests/`，前端测试放在 `web/` 的既有测试目录中。
@@ -30,12 +33,15 @@
 - `pnpm dev`：同时启动 Axum 后端和 Vite 前端。
 - `pnpm --dir web dev`：只启动前端开发服务器。
 - `pnpm --dir web test`：运行前端测试；`pnpm --dir web build`：生成生产构建。
+- `cargo run -- /path/to/share`：指定要共享的目录；省略参数时使用当前目录。
 
 ## 编码风格与命名约定
 
 使用稳定版 Rust、`rustfmt` 默认规则和四空格缩进。遵循 Rust 命名规范：函数、变量和模块使用 `snake_case`；类型和 trait 使用 `UpperCamelCase`；常量使用 `SCREAMING_SNAKE_CASE`。函数应保持简短并使用明确的类型；对于可恢复错误，优先通过 `Result` 传递，避免使用 panic。避免无意义的 `clone`：优先借用、传递引用、移动所有权或调整数据结构；只有在确实需要独立所有权或满足生命周期要求时才克隆，并在代码评审中说明原因。
 
 前端使用 TypeScript、Vite 和 Tailwind CSS v4；组件使用 `PascalCase`，函数和变量使用 `camelCase`。优先使用 Tailwind utility class，只有全局基础样式或确有复用价值时才写 CSS。
+
+文件 API 必须始终把用户传入的路径限制在启动时绑定的根目录内；新增文件操作时要覆盖路径穿越、符号链接越界和同名文件场景。聊天消息通过 WebSocket 广播，消息状态只保存在进程内，不要假设服务重启后仍然存在。
 
 ## 测试指南
 

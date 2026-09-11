@@ -4,7 +4,7 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn health_endpoint_returns_ok() {
-    let response = create_app()
+    let response = create_app(std::env::current_dir().expect("current directory should exist"))
         .oneshot(
             axum::http::Request::builder()
                 .uri("/api/health")
