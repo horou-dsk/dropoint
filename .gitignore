@@ -1,0 +1,9 @@
+/target
+/\.pnpm-store
+/node_modules
+/web/node_modules
+/web/dist
+*.local
+.env
+.env.*
+!.env.example
