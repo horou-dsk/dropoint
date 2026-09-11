@@ -25,6 +25,33 @@ Dropoint 是一个局域网文件共享与文本传递工具。启动时绑定�
 
 ## 快速开始
 
+### 运行发布版二进制
+
+从本仓库的 GitHub Releases 下载对应平台的文件。每个二进制已经包含网页，运行时不需要 Rust、Node.js、pnpm 或独立的 `web/dist` 目录。指定共享目录后，通过 `localhost` 或运行主机的局域网 IP 访问实际监听端口：
+
+```powershell
+# Windows（将版本号替换为下载的版本）
+.\dropoint-v0.1.0-windows-x86_64.exe "D:\Shared Files" --port 8080
+```
+
+```sh
+# Linux glibc 示例；macOS 或 musl Linux 使用对应文件名
+chmod +x dropoint-v0.1.0-linux-x86_64-gnu
+./dropoint-v0.1.0-linux-x86_64-gnu /path/to/share --port 8080
+```
+
+打开 [http://localhost:8080](http://localhost:8080)，其他设备访问 `http://<运行主机的局域网 IP>:8080`。共享目录必须已存在；省略 `--port` 时自动分配空闲端口，省略目录参数时共享当前工作目录。可将程序重命名为 `dropoint`（Windows 为 `dropoint.exe`）。
+
+| 产物后缀 | 平台 |
+| --- | --- |
+| `windows-x86_64.exe` | Windows x64；静态链接 CRT，无需单独安装 VC++ 运行库 |
+| `macos-x86_64` | macOS Intel |
+| `macos-aarch64` | macOS Apple Silicon |
+| `linux-x86_64-gnu` | Linux x64 glibc；在 Ubuntu 22.04 上构建，glibc 基线为 2.35 |
+| `linux-x86_64-musl` | Linux x64，静态链接 musl，适合 Alpine 或 glibc 较旧的系统 |
+
+第一版不配置代码签名或 macOS notarization。macOS/Linux 下载后需要使用 `chmod +x` 添加执行权限。
+
 ### 环境准备
 
 - 最新稳定版 [Rust 与 Cargo](https://rustup.rs/)。
@@ -37,6 +64,7 @@ Dropoint 是一个局域网文件共享与文本传递工具。启动时绑定�
 
 ```sh
 pnpm install
+pnpm --dir web build
 pnpm dev
 ```
 
@@ -135,6 +163,13 @@ pnpm --dir web dev
 
 ## 开发与构建
 
+首次运行 Cargo（包括测试和开发构建）前，先安装依赖并生成前端产物：
+
+```sh
+pnpm install --frozen-lockfile
+pnpm --dir web build
+```
+
 ```sh
 cargo fmt --all -- --check
 cargo check
@@ -143,16 +178,31 @@ cargo test
 pnpm --dir web test
 ```
 
-生成构建产物：
+构建单二进制文件，必须先构建前端：
 
 ```sh
-cargo build --release
 pnpm --dir web build
+cargo build --release --locked
 ```
 
-后端二进制位于 `target/release/`，前端产物位于 `web/dist/`。当前 Rust 服务只提供 API，不内嵌或托管前端静态文件；生产运行需要另外配置静态文件服务及 `/api` HTTP/WebSocket 代理。
+程序位于 `target/release/dropoint`（Windows 为 `dropoint.exe`）。`rust-embed` 在 debug 和 release 构建中都将 `web/dist/` 编译进程序；Axum 在同一端口提供网页、`/api/*` 和聊天 WebSocket。前端修改后需先重新构建前端，再编译 Rust；`build.rs` 会跟踪资源的新增、删除和修改。开发时仍可使用 Vite 在 `5173` 端口提供热更新。
+
+运行 `node web/scripts/smoke-release.mjs target/release/dropoint`（Windows 追加 `.exe`）可验证发布程序。脚本仅将二进制复制到临时目录，绑定另一个共享目录启动，检查内嵌页面、JS/CSS、SPA fallback、API 404、健康接口、上传下载与 WebSocket 聊天，最后停止程序并清理临时文件。
 
 Windows 下若运行中的程序锁定测试构建产物，可使用 `cargo test --target-dir target/verification`。
+
+### GitHub Actions 发布
+
+[Release binaries](.github/workflows/release.yml) 仅在推送 `v*` 标签或手动触发时执行。流水线构建五个目标并逐个验证程序，全部成功后才将原始二进制上传到 GitHub Release，不发布额外压缩包或校验文件。
+
+先提交并推送工作流和源码改动。在打标签前设置 `Cargo.toml` 版本并同步 `Cargo.lock`；标签决定下载文件名，`--version` 使用 Cargo 包版本。之后创建并推送发布标签：
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+手动构建时，在 **Actions → Release binaries → Run workflow** 输入已有标签，例如 `v0.1.0`。标签必须以 `v` 加字母或数字开头，且只包含字母、数字、点、下划线或连字符。流水线先解析标签，所有平台都构建该标签指向的同一提交；被标记的提交必须包含工作流、发布验证脚本和资源嵌入改动。构建任务仅使用仓库读取权限，只有 Release 任务通过内置 `GITHUB_TOKEN` 获得 `contents: write` 权限。
 
 ## 项目结构
 

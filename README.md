@@ -25,6 +25,33 @@ Dropoint is a local network tool for sharing files and text. Bind a local direct
 
 ## Quick start
 
+### Run a release binary
+
+Download the binary for your platform from this repository's GitHub Releases. Each binary includes the web interface; Rust, Node.js, pnpm and a separate `web/dist` directory are not needed to run it. Choose the directory to share and open the printed port using `localhost` or the host's LAN IP:
+
+```powershell
+# Windows (replace the version with the downloaded release)
+.\dropoint-v0.1.0-windows-x86_64.exe "D:\Shared Files" --port 8080
+```
+
+```sh
+# Linux glibc example; use the matching filename on macOS or musl Linux
+chmod +x dropoint-v0.1.0-linux-x86_64-gnu
+./dropoint-v0.1.0-linux-x86_64-gnu /path/to/share --port 8080
+```
+
+Open [http://localhost:8080](http://localhost:8080), or `http://<host-LAN-IP>:8080` from another device. The directory must already exist. Omitting `--port` allocates an available port; omitting the directory shares the working directory. Renaming the executable to `dropoint` (or `dropoint.exe`) is supported.
+
+| Asset suffix | Platform |
+| --- | --- |
+| `windows-x86_64.exe` | Windows x64; statically links the CRT, without a separate VC++ runtime install |
+| `macos-x86_64` | macOS Intel |
+| `macos-aarch64` | macOS Apple Silicon |
+| `linux-x86_64-gnu` | Linux x64 with glibc; built on Ubuntu 22.04 (glibc 2.35 baseline) |
+| `linux-x86_64-musl` | Linux x64 with statically linked musl; suitable for Alpine and systems with older glibc |
+
+The initial releases are unsigned; macOS binaries are not notarized. macOS/Linux downloads need executable permission (`chmod +x`).
+
 ### Prerequisites
 
 - The latest stable [Rust and Cargo](https://rustup.rs/).
@@ -37,6 +64,7 @@ Run these commands from the repository root:
 
 ```sh
 pnpm install
+pnpm --dir web build
 pnpm dev
 ```
 
@@ -135,6 +163,13 @@ Use Refresh to reload the file listing; chat messages are broadcast in real time
 
 ## Development and builds
 
+Before running Cargo (including tests and development builds), install dependencies and build the frontend once:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm --dir web build
+```
+
 ```sh
 cargo fmt --all -- --check
 cargo check
@@ -143,16 +178,31 @@ cargo test
 pnpm --dir web test
 ```
 
-Build the backend and frontend:
+Build the single executable, always building the frontend first:
 
 ```sh
-cargo build --release
 pnpm --dir web build
+cargo build --release --locked
 ```
 
-The backend binary is placed in `target/release/`, and frontend assets are placed in `web/dist/`. The Rust service currently provides only the API; it does not embed or serve frontend assets. Production use requires a separate static file server and an `/api` HTTP/WebSocket proxy.
+The executable is `target/release/dropoint` (`dropoint.exe` on Windows). `rust-embed` compiles `web/dist/` into the executable in both debug and release builds. Axum serves the web interface, `/api/*` and the chat WebSocket on the same port. Rebuild the frontend and then Rust after frontend changes; `build.rs` tracks added, removed and modified assets. During development, Vite still provides hot reload on port `5173`.
+
+Run the release smoke test with `node web/scripts/smoke-release.mjs target/release/dropoint` (append `.exe` on Windows). It copies only the executable into a temporary directory, starts it against a separate shared directory, checks the embedded page, JS/CSS, SPA fallback, API 404s, health, uploads/downloads and WebSocket chat, then stops it and removes its temporary files.
 
 On Windows, if a running process locks the test build output, use `cargo test --target-dir target/verification`.
+
+### GitHub Actions releases
+
+[Release binaries](.github/workflows/release.yml) runs only for pushed `v*` tags or manual dispatch. It builds all five targets, verifies each executable, and uploads the raw binaries to a GitHub Release only after every target succeeds. No additional archive or checksum files are published.
+
+Commit and push the workflow and source changes first. Set the intended version in `Cargo.toml` and refresh `Cargo.lock` before tagging; the tag controls asset names while `--version` uses the Cargo package version. Then create and push a release tag:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+For a manual run, choose **Actions → Release binaries → Run workflow** and enter an existing tag, such as `v0.1.0`. Tags must start with `v` followed by a letter or number and contain only letters, numbers, dots, underscores or hyphens. The workflow resolves that tag once and builds its exact commit for every platform. The tagged commit must include the workflow, smoke test and frontend embedding changes. Builds use read-only repository permissions; only the Release job grants `contents: write` through the built-in `GITHUB_TOKEN`.
 
 ## Project structure
 

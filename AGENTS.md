@@ -23,6 +23,8 @@
 
 以下命令均在仓库根目录执行：
 
+Rust 的 debug/release 构建均嵌入 `web/dist/`；首次运行 Cargo 前先执行 `pnpm install --frozen-lockfile` 和 `pnpm --dir web build`，前端修改后需重新构建前端再编译 Rust。发布流水线 `.github/workflows/release.yml` 自动按此顺序构建。
+
 - `cargo run`：构建并在本地运行应用。
 - `cargo check`：快速检查编译，不生成可运行的二进制文件。
 - `cargo build`：生成调试构建；发布构建使用 `cargo build --release`。

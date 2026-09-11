@@ -1,0 +1,156 @@
+name: Release binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v-prefixed tag to build and release (for example v0.1.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Resolve release tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate and resolve tag
+        id: resolve
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
+            echo 'Expected a v-prefixed tag containing only letters, numbers, dots, underscores or hyphens.' >&2
+            exit 1
+          fi
+          sha=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.suffix }}
+    needs: prepare
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            suffix: windows-x86_64.exe
+            binary: dropoint.exe
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            suffix: macos-x86_64
+            binary: dropoint
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            suffix: macos-aarch64
+            binary: dropoint
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            suffix: linux-x86_64-gnu
+            binary: dropoint
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            suffix: linux-x86_64-musl
+            binary: dropoint
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out resolved commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install pnpm from packageManager
+        uses: pnpm/action-setup@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm --dir web build
+
+      - name: Build binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Verify standalone binary
+        run: node web/scripts/smoke-release.mjs target/${{ matrix.target }}/release/${{ matrix.binary }}
+
+      - name: Stage release asset
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          TARGET: ${{ matrix.target }}
+          BINARY: ${{ matrix.binary }}
+          SUFFIX: ${{ matrix.suffix }}
+        run: |
+          mkdir -p release
+          cp "target/${TARGET}/release/${BINARY}" "release/dropoint-${RELEASE_TAG}-${SUFFIX}"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dropoint-${{ matrix.suffix }}
+          path: release/dropoint-*
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          pattern: dropoint-*
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          files: release/dropoint-*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

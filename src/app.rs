@@ -32,5 +32,6 @@ pub fn create_app(root: PathBuf) -> Router {
         .route("/api/files/delete", post(delete_files))
         .route("/api/chat", get(chat_socket))
         .layer(DefaultBodyLimit::max(1024 * 1024 * 1024))
+        .fallback(crate::routes::frontend::serve)
         .with_state(state)
 }
