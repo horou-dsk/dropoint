@@ -40,9 +40,9 @@ pnpm install
 pnpm dev
 ```
 
-打开 [http://localhost:5173](http://localhost:5173)。此命令同时启动 Axum 和 Vite，默认共享运行 `cargo run` 时的当前工作目录；从仓库根目录启动时，共享的就是仓库目录。
+打开 [http://localhost:5173](http://localhost:5173)。此命令同时启动 Axum 和 Vite，并显式指定后端端口为 `3000`，与开发代理保持一致。默认共享运行 `cargo run` 时的当前工作目录；从仓库根目录启动时，共享的就是仓库目录。
 
-| 服务 | 默认监听地址 | 用途 |
+| 服务 | `pnpm dev` 的监听地址 | 用途 |
 | --- | --- | --- |
 | Vite | `0.0.0.0:5173` | 网页及 `/api` HTTP/WebSocket 代理 |
 | Axum | `0.0.0.0:3000` | 文件 API 与共享对话 |
@@ -55,13 +55,13 @@ pnpm dev
 
 ```sh
 # 终端 1：启动后端，指定共享目录
-cargo run -- /path/to/share
+cargo run -- /path/to/share --port 3000
 ```
 
 Windows 示例：
 
 ```powershell
-cargo run -- "D:\Shared Files"
+cargo run -- "D:\Shared Files" --port 3000
 ```
 
 ```sh
@@ -70,6 +70,41 @@ pnpm --dir web dev
 ```
 
 这两个命令替代 `pnpm dev`。省略目录参数时使用当前工作目录；指定相对路径时，也以当前工作目录为基准。
+
+### 指定监听端口
+
+单独启动后端时，使用 `--port`（简写 `-p`）指定端口；未指定时由操作系统分配空闲端口：
+
+```sh
+# 共享当前目录，自动分配端口
+cargo run
+
+# 共享当前目录，监听 8080
+cargo run -- --port 8080
+
+# 同时指定目录和端口，参数顺序不限
+cargo run -- /path/to/share -p 8080
+
+# 查看命令行帮助
+cargo run -- --help
+```
+
+端口 `0` 也表示自动分配。启动日志 `API server listening on http://0.0.0.0:<port>` 会输出实际端口，访问时使用 `localhost` 或运行主机的局域网 IP。显式指定的端口不可用时，程序会报错退出，不会静默切换端口。此参数控制 Axum，Vite 仍默认使用 `5173`。
+
+单独启动 Vite 时，如果后端端口不是 `3000`，需通过 `DROPOINT_API_PORT` 设置代理端口。以后端监听 `8080` 为例：
+
+```sh
+# macOS / Linux，在前端终端执行
+DROPOINT_API_PORT=8080 pnpm --dir web dev
+```
+
+```powershell
+# Windows PowerShell，在前端终端执行
+$env:DROPOINT_API_PORT = '8080'
+pnpm --dir web dev
+```
+
+后端自动分配端口时，将示例中的数值替换为实际日志输出的端口。更改代理端口后需重新启动 Vite；文件请求和聊天 WebSocket 均通过该代理连接。
 
 ## 使用方式
 
@@ -125,6 +160,7 @@ Windows 下若运行中的程序锁定测试构建产物，可使用 `cargo test
 dropoint/
 ├── src/
 │   ├── main.rs          # 目录参数与服务启动
+│   ├── cli.rs           # 共享目录与端口参数
 │   ├── app.rs           # Axum 路由组合
 │   ├── state.rs         # 共享目录、聊天和归档状态
 │   ├── routes.rs

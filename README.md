@@ -40,9 +40,9 @@ pnpm install
 pnpm dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173). This starts both Axum and Vite. The shared directory defaults to the working directory of `cargo run`; when launched from the repository root, it shares the repository directory.
+Open [http://localhost:5173](http://localhost:5173). This starts both Axum and Vite, explicitly setting the backend port to `3000` to match the development proxy. The shared directory defaults to the working directory of `cargo run`; when launched from the repository root, it shares the repository directory.
 
-| Service | Default listening address | Purpose |
+| Service | Listening address with `pnpm dev` | Purpose |
 | --- | --- | --- |
 | Vite | `0.0.0.0:5173` | Web interface and `/api` HTTP/WebSocket proxy |
 | Axum | `0.0.0.0:3000` | File API and shared chat |
@@ -55,13 +55,13 @@ Open two terminals at the repository root and start the backend and frontend sep
 
 ```sh
 # Terminal 1: start the backend with a shared directory
-cargo run -- /path/to/share
+cargo run -- /path/to/share --port 3000
 ```
 
 Windows example:
 
 ```powershell
-cargo run -- "D:\Shared Files"
+cargo run -- "D:\Shared Files" --port 3000
 ```
 
 ```sh
@@ -70,6 +70,41 @@ pnpm --dir web dev
 ```
 
 Use these two commands in place of `pnpm dev`. Omitting the directory argument uses the current working directory. Relative directory arguments are also resolved against the working directory.
+
+### Choose a listening port
+
+Standalone backend runs use an available port assigned by the operating system unless `--port` (or `-p`) is provided:
+
+```sh
+# Share the working directory on an automatically assigned port
+cargo run
+
+# Share the working directory on port 8080
+cargo run -- --port 8080
+
+# Combine a directory with a port; either argument order is supported
+cargo run -- /path/to/share -p 8080
+
+# Show command-line help
+cargo run -- --help
+```
+
+Port `0` also requests automatic allocation. Read the actual port from the startup message `API server listening on http://0.0.0.0:<port>` and connect using `localhost` or the host's LAN IP. An unavailable explicit port causes startup to fail rather than silently choosing another port. The port option controls Axum; Vite still defaults to `5173`.
+
+When starting Vite separately, set `DROPOINT_API_PORT` to the backend's actual port if it differs from `3000`. For a backend on port `8080`:
+
+```sh
+# macOS / Linux, in the frontend terminal
+DROPOINT_API_PORT=8080 pnpm --dir web dev
+```
+
+```powershell
+# Windows PowerShell, in the frontend terminal
+$env:DROPOINT_API_PORT = '8080'
+pnpm --dir web dev
+```
+
+For an automatically assigned port, substitute the value printed by the backend. Restart Vite when changing its proxy port; both file requests and chat WebSocket connections use this proxy.
 
 ## Usage
 
@@ -125,6 +160,7 @@ On Windows, if a running process locks the test build output, use `cargo test --
 dropoint/
 ├── src/
 │   ├── main.rs          # Directory argument and server startup
+│   ├── cli.rs           # Shared directory and port arguments
 │   ├── app.rs           # Axum route composition
 │   ├── state.rs         # Shared directory, chat, and archive state
 │   ├── routes.rs

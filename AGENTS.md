@@ -4,7 +4,7 @@
 
 本仓库是名为 `dropoint` 的全栈项目，后端使用 Rust，前端使用 Web 技术。
 
-- `src/main.rs`：Rust 后端启动入口，解析共享目录参数并启动局域网服务。
+- `src/main.rs`：Rust 后端启动入口；`src/cli.rs`：共享目录、`--port` / `-p` 参数解析。
 - `src/app.rs`、`src/state.rs`：Axum 路由组合和共享应用状态。
 - `src/routes/`：健康检查、文件浏览/上传/下载/预览和 WebSocket 聊天路由。
 - `Cargo.toml`：后端包元数据、Rust 版本和依赖配置。
@@ -30,10 +30,11 @@
 - `cargo fmt --all -- --check`：检查代码格式；使用 `cargo fmt --all` 自动格式化。
 - `cargo clippy --all-targets --all-features -- -D warnings`：检查常见 Rust 问题，并将警告视为错误。
 - `pnpm install`：安装根目录和 `web/` 的前端依赖。
-- `pnpm dev`：同时启动 Axum 后端和 Vite 前端。
+- `pnpm dev`：同时启动 Axum 后端和 Vite 前端，显式使用后端端口 `3000` 与开发代理匹配。
 - `pnpm --dir web dev`：只启动前端开发服务器。
 - `pnpm --dir web test`：运行前端测试；`pnpm --dir web build`：生成生产构建。
 - `cargo run -- /path/to/share`：指定要共享的目录；省略参数时使用当前目录。
+- `cargo run -- /path/to/share --port 8080`：指定后端端口；省略 `--port` 或设置为 `0` 时由操作系统分配空闲端口，启动日志输出实际端口。单独启动 Vite 时可通过 `DROPOINT_API_PORT` 环境变量指定后端代理端口，默认 `3000`。
 
 ## 编码风格与命名约定
 
