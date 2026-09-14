@@ -93,7 +93,18 @@ export class UploadConflictError extends Error {
   }
 }
 
-export async function uploadFile({ file, relativePath }: UploadItem, destination: string, conflict: ConflictMode | 'fail' = 'fail'): Promise<{ path: string; size: number }> {
+export type UploadProgress = {
+  loaded: number | null;
+  total: number;
+  phase: 'uploading' | 'saving';
+};
+
+export function uploadFile(
+  { file, relativePath }: UploadItem,
+  destination: string,
+  conflict: ConflictMode | 'fail' = 'fail',
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<{ path: string; size: number }> {
   const query = new URLSearchParams();
   if (destination) query.set('path', destination);
   if (conflict !== 'fail') query.set('conflict', conflict);
@@ -101,11 +112,34 @@ export async function uploadFile({ file, relativePath }: UploadItem, destination
   form.append('relative_path', relativePath);
   form.append('file', file, file.name);
   const suffix = query.toString();
-  const response = await fetch(`/api/files${suffix ? `?${suffix}` : ''}`, { method: 'POST', body: form });
-  if (response.status === 409) {
-    const body = (await response.json()) as { message?: string };
-    throw new UploadConflictError(body.message || file.name);
-  }
-  if (!response.ok) throw new Error(`上传失败：HTTP ${response.status}`);
-  return response.json() as Promise<{ path: string; size: number }>;
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', `/api/files${suffix ? `?${suffix}` : ''}`);
+    request.responseType = 'json';
+    request.upload.onprogress = (event) => {
+      // XHR counts the multipart envelope too; scale its ratio to file bytes.
+      const loaded = event.lengthComputable && event.total > 0
+        ? Math.floor(file.size * Math.min(1, Math.max(0, event.loaded / event.total)))
+        : null;
+      onProgress?.({ loaded, total: file.size, phase: 'uploading' });
+    };
+    request.upload.onload = () => onProgress?.({ loaded: file.size, total: file.size, phase: 'saving' });
+    request.onload = () => {
+      const body = request.response;
+      if (request.status === 409) {
+        reject(new UploadConflictError(body?.message || relativePath));
+      } else if (request.status < 200 || request.status >= 300) {
+        reject(new Error(body?.message || `上传失败：HTTP ${request.status}`));
+      } else if (typeof body?.path !== 'string' || !Number.isFinite(body?.size) || body.size < 0) {
+        reject(new Error('上传失败：服务端返回了无效响应'));
+      } else {
+        resolve({ path: body.path, size: body.size });
+      }
+    };
+    request.onerror = () => reject(new Error('上传失败：网络连接中断，请重试'));
+    request.onabort = () => reject(new Error('上传已中止'));
+    request.ontimeout = () => reject(new Error('上传超时，请重试'));
+    onProgress?.({ loaded: 0, total: file.size, phase: 'uploading' });
+    request.send(form);
+  });
 }

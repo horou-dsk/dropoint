@@ -68,11 +68,39 @@ pub async fn upload_file(
                 let root = Arc::clone(&state.root);
                 let destination = query.path.clone(); // Owned by the blocking filesystem task.
                 let conflict = query.conflict;
-                let (file, mut upload) = tokio::task::spawn_blocking(move || {
+                let prepared = tokio::task::spawn_blocking(move || {
                     prepare_upload(&root, &destination, &relative_path, conflict)
                 })
                 .await
-                .map_err(|error| FileError::Io(std::io::Error::other(error)))??;
+                .map_err(|error| FileError::Io(std::io::Error::other(error)))?;
+                let (file, mut upload) = match prepared {
+                    Ok(upload) => upload,
+                    Err(error @ FileError::Conflict(_)) => {
+                        // An early HTTP/1 response can reset a browser's active upload.
+                        // Discard the remaining body so XHR can receive the 409 response.
+                        while field
+                            .chunk()
+                            .await
+                            .map_err(|_| FileError::InvalidUpload)?
+                            .is_some()
+                        {}
+                        drop(field);
+                        while let Some(mut remaining) = multipart
+                            .next_field()
+                            .await
+                            .map_err(|_| FileError::InvalidUpload)?
+                        {
+                            while remaining
+                                .chunk()
+                                .await
+                                .map_err(|_| FileError::InvalidUpload)?
+                                .is_some()
+                            {}
+                        }
+                        return Err(error);
+                    }
+                    Err(error) => return Err(error),
+                };
                 let mut file = tokio::fs::File::from_std(file);
                 let written = async {
                     while let Some(chunk) =

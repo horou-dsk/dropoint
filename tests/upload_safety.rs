@@ -1,6 +1,10 @@
 use std::{
     convert::Infallible,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -27,6 +31,45 @@ fn request(mode: &str, body: Body) -> Request<Body> {
 
 fn complete_body(path: &str, content: &str) -> Body {
     Body::from(format!("{}{content}\r\n--upload--\r\n", prefix(path)))
+}
+
+#[tokio::test]
+async fn consumes_conflicting_upload_before_returning_409_without_changing_the_file() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("same.txt"), "original").unwrap();
+    let consumed = Arc::new(AtomicBool::new(false));
+    let consumed_by_stream = Arc::clone(&consumed);
+    let body = Body::from_stream(
+        stream::once(async { Ok::<_, Infallible>(Bytes::from(prefix("same.txt"))) }).chain(
+            stream::once(async move {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                consumed_by_stream.store(true, Ordering::SeqCst);
+                Ok::<_, Infallible>(Bytes::from(format!(
+                    "{}\r\n--upload--\r\n",
+                    "x".repeat(1024 * 1024)
+                )))
+            }),
+        ),
+    );
+    let response = create_app(directory.path().to_path_buf())
+        .oneshot(request("fail", body))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(
+        consumed.load(Ordering::SeqCst),
+        "read the body before replying so the browser receives HTTP 409 instead of a connection reset"
+    );
+    let error = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&error).unwrap()["message"],
+        "same.txt"
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("same.txt")).unwrap(),
+        "original"
+    );
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
 }
 
 async fn wait_for_staging(root: &Path) {

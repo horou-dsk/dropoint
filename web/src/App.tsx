@@ -19,6 +19,7 @@ import FileBrowser, { type FileView } from './components/FileBrowser';
 import PreviewDialog from './components/PreviewDialog';
 import ContextMenu, { type MenuItem, type MenuPosition } from './components/ContextMenu';
 import DeleteDialog from './components/DeleteDialog';
+import UploadProgress, { type UploadStatus } from './components/UploadProgress';
 import { useFileSelection } from './lib/useFileSelection';
 
 type ConflictChoice = ConflictMode | 'cancel';
@@ -33,7 +34,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [uploading, setUploading] = useState<string | null>(null);
+  const [uploading, setUploading] = useState<UploadStatus | null>(null);
+  const [uploadBusy, setUploadBusy] = useState(false);
   const [conflict, setConflict] = useState<ConflictPrompt | null>(null);
   const [fileView, setFileView] = useState<FileView>(() => (
     localStorage.getItem('dropoint-file-view') === 'list' ? 'list' : 'grid'
@@ -51,14 +53,20 @@ export default function App() {
   const fileInput = useRef<HTMLInputElement>(null);
   const currentPath = useRef('');
   const directoryRequest = useRef(0);
+  const directoryLoading = useRef(false);
+  const directoryRefreshPending = useRef(false);
   const deletePending = useRef(false);
+  const uploadPending = useRef(false);
 
   useEffect(() => {
     localStorage.setItem('dropoint-file-view', fileView);
   }, [fileView]);
 
-  const loadDirectory = useCallback(async (nextPath: string, historyMode: 'push' | 'none' = 'none') => {
+  const loadDirectory = useCallback(async function loadDirectory(nextPath: string, historyMode: 'push' | 'none' = 'none'): Promise<void> {
     const request = ++directoryRequest.current;
+    directoryLoading.current = true;
+    // A request started after an upload already covers its refresh requirement.
+    directoryRefreshPending.current = false;
     const previousPath = currentPath.current;
     setLoading(true);
     setError(null);
@@ -80,7 +88,14 @@ export default function App() {
     } catch (cause) {
       if (request === directoryRequest.current) setError(cause instanceof Error ? cause.message : '读取目录失败');
     } finally {
-      if (request === directoryRequest.current) setLoading(false);
+      if (request === directoryRequest.current) {
+        directoryLoading.current = false;
+        if (directoryRefreshPending.current) {
+          void loadDirectory(currentPath.current);
+        } else {
+          setLoading(false);
+        }
+      }
     }
   }, [reconcile]);
 
@@ -169,27 +184,70 @@ export default function App() {
 
   const askConflict = (conflictingPath: string) => new Promise<ConflictChoice>((resolve) => setConflict({ path: conflictingPath, resolve }));
 
-  const uploadFiles = async (files: UploadItem[]) => {
-    if (!files.length) return;
-    for (let index = 0; index < files.length; index += 1) {
-      const file = files[index]; let mode: ConflictMode | 'fail' = 'fail';
-      setUploading(`正在上传 ${index + 1}/${files.length}：${file.relativePath}`);
-      while (true) {
-        try { await uploadFile(file, path, mode); break; } catch (cause) {
-          if (!(cause instanceof UploadConflictError)) { setError(cause instanceof Error ? cause.message : '上传失败'); break; }
-          const choice = await askConflict(cause.path);
-          if (choice === 'cancel') { setUploading(null); return; }
-          mode = choice;
+  const uploadFiles = async (source: UploadItem[] | Promise<UploadItem[]>) => {
+    if (uploadPending.current) return;
+    uploadPending.current = true;
+    setUploadBusy(true);
+    setOperation(null);
+    const destination = currentPath.current;
+    let completedFiles = 0;
+    let completedBytes = 0;
+    const failures: string[] = [];
+    let cancelled = false;
+    try {
+      const files = await source;
+      if (!files.length) return;
+      const totalBytes = files.reduce((total, item) => total + item.file.size, 0);
+      uploadBatch: for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        let mode: ConflictMode | 'fail' = 'fail';
+        while (true) {
+          try {
+            await uploadFile(file, destination, mode, (progress) => setUploading({
+              fileName: file.relativePath, fileIndex: index + 1, fileCount: files.length,
+              completedFiles, completedBytes, totalBytes, progress, awaitingConflict: false,
+            }));
+            completedFiles += 1;
+            completedBytes += file.file.size;
+            break;
+          } catch (cause) {
+            if (!(cause instanceof UploadConflictError)) {
+              failures.push(`${file.relativePath}：${cause instanceof Error ? cause.message : '上传失败'}`);
+              break;
+            }
+            setUploading((previous) => previous && { ...previous, awaitingConflict: true });
+            const choice = await askConflict(cause.path);
+            if (choice === 'cancel') { cancelled = true; break uploadBatch; }
+            mode = choice;
+          }
         }
       }
+      setOperation({
+        error: failures.length > 0,
+        text: [
+          cancelled ? `已取消剩余上传，已完成 ${completedFiles}/${files.length} 个文件` : `上传结束：成功 ${completedFiles}/${files.length} 个文件`,
+          failures.length ? `失败 ${failures.length} 个：${failures.join('；')}` : '',
+        ].filter(Boolean).join('；'),
+      });
+    } catch (cause) {
+      setOperation({ error: true, text: cause instanceof Error ? cause.message : '无法读取上传文件' });
+    } finally {
+      setUploading(null);
+      setUploadBusy(false);
+      uploadPending.current = false;
+      if (completedFiles > 0) {
+        // Finish navigation first, then refresh its resulting directory once.
+        if (directoryLoading.current) directoryRefreshPending.current = true;
+        else void loadDirectory(currentPath.current);
+      }
     }
-    setUploading(null); await loadDirectory(path);
   };
 
   const handleDrop = async (event: React.DragEvent) => {
     event.preventDefault(); setDragging(false);
+    if (uploadPending.current) return;
     try {
-      await uploadFiles(await collectDroppedFiles(event.dataTransfer));
+      await uploadFiles(collectDroppedFiles(event.dataTransfer));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '无法读取拖入的文件');
     }
@@ -226,13 +284,14 @@ export default function App() {
               </svg>
             </button>
             <button className="secondary-button" onClick={() => void loadDirectory(path)}>刷新</button>
-            <button className="primary-button" onClick={() => fileInput.current?.click()}>上传文件</button>
+            <button className="primary-button" disabled={uploadBusy} onClick={() => fileInput.current?.click()}>上传文件</button>
             <input
               ref={fileInput}
               className="hidden"
               type="file"
               aria-label="上传文件"
               multiple
+              disabled={uploadBusy}
               onChange={(event) => {
                 if (event.target.files) void uploadFiles(filesForUpload(event.target.files));
                 event.target.value = '';
@@ -299,7 +358,8 @@ export default function App() {
               <button className="secondary-button text-rose-600 dark:text-rose-300" disabled={!selectedEntries.length || packing || deleting || loading} onClick={() => setDeleteTargets(selectedEntries)}>删除所选项目</button>
             </div>
             {operation && <p role={operation.error ? 'alert' : 'status'} className={`max-h-24 shrink-0 overflow-y-auto break-all border-b border-line px-3 py-2 text-xs ${operation.error ? 'bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-200' : 'bg-surface text-muted'}`}>{operation.text}</p>}
-            {uploading && <p role="status" className="shrink-0 truncate border-b border-line bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-200">{uploading}</p>}
+            {uploadBusy && !uploading && <p role="status" className="shrink-0 border-b border-line bg-surface px-3 py-2 text-xs text-muted">正在读取上传文件…</p>}
+            {uploading && <UploadProgress status={uploading} />}
             {error && <p role="alert" className="shrink-0 border-b border-line bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-950 dark:text-rose-200">{error}</p>}
             {loading ? (
               <div role="status" className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted">正在打开目录…</div>

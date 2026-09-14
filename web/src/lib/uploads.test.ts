@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { collectDroppedFiles, filesForUpload } from './uploads';
 import { uploadFile } from './api';
+import { mockUploadRequests, UploadRequestMock } from '../test/UploadRequestMock';
 
 function fileEntry(file: File): FileSystemEntry {
   return {
@@ -76,12 +77,15 @@ describe('dropped files', () => {
   });
 
   it('sends the separate relative path in the multipart API', async () => {
-    const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ path: 'folder/file.txt', size: 4 })));
-    vi.stubGlobal('fetch', request);
-    await uploadFile({ file: new File(['data'], 'file.txt'), relativePath: 'folder/file.txt' }, 'destination');
-    const [url, options] = request.mock.calls[0];
-    expect(url).toBe('/api/files?path=destination');
-    expect((options.body as FormData).get('relative_path')).toBe('folder/file.txt');
-    expect(((options.body as FormData).get('file') as File).name).toBe('file.txt');
+    mockUploadRequests();
+    const pending = uploadFile({ file: new File(['data'], 'file.txt'), relativePath: 'folder/file.txt' }, 'destination');
+    const request = UploadRequestMock.requests[0];
+    expect(request.open).toHaveBeenCalledWith('POST', '/api/files?path=destination');
+    const form = request.send.mock.calls[0][0] as FormData;
+    expect(Array.from(form.keys())).toEqual(['relative_path', 'file']);
+    expect(form.get('relative_path')).toBe('folder/file.txt');
+    expect((form.get('file') as File).name).toBe('file.txt');
+    request.respond(200, { path: 'folder/file.txt', size: 4 });
+    await expect(pending).resolves.toEqual({ path: 'folder/file.txt', size: 4 });
   });
 });

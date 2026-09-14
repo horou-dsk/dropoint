@@ -12,6 +12,7 @@ Dropoint is a local network tool for sharing files and text. Bind a local direct
 - **Batch downloads**: Download a single file directly, or combine folders and multiple items into one ZIP that preserves hierarchy, Unicode filenames, and empty directories.
 - **Drag-and-drop uploads**: Drop multiple files or folders into the current directory. Resolve filename conflicts by automatically renaming, overwriting, or cancelling.
 - **Shared chat**: Synchronize text over WebSocket, with connection status, automatic reconnection, and per-message copying. The server retains the latest 200 messages in memory and clears them on restart.
+- **Upload progress**: Show current-file and byte-weighted batch progress with transferred sizes. After transmission, wait for the server to confirm saving; retain success, failure and cancellation results. Conflicting files can still be renamed or overwritten, with progress reset for each retry.
 - **Appearance and layout**: Follow the system light/dark theme by default and remember manual overrides. File and chat panels scroll independently; switch between panels on narrow screens.
 
 ## Tech stack
