@@ -60,6 +60,26 @@ describe('upload progress UI', () => {
     expect(screen.getByRole('button', { name: '上传文件' })).toBeEnabled();
   });
 
+  it('asks about a known conflict before sending the file', async () => {
+    const original = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((url, options) => {
+      if (String(url).startsWith('/api/files/conflict')) {
+        return Promise.resolve(json({ exists: true, path: 'one.txt' }));
+      }
+      return original(url, options);
+    });
+
+    render(<App />);
+    await screen.findByRole('button', { name: 'Folder' });
+    fireEvent.change(screen.getByLabelText('上传文件', { selector: 'input' }), { target: { files: [file('one.txt', 100)] } });
+    expect(await screen.findByRole('dialog', { name: '发现同名文件' })).toBeInTheDocument();
+    expect(UploadRequestMock.requests).toHaveLength(0);
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '覆盖' }));
+    await waitFor(() => expect(UploadRequestMock.requests).toHaveLength(1));
+    expect(UploadRequestMock.requests[0].open).toHaveBeenCalledWith('POST', '/api/files?conflict=overwrite');
+  });
+
   it.each(['重命名', '覆盖'])('resets only the current file when choosing %s', async (choice) => {
     const first = await start([file('one.txt', 100), file('two.txt', 100)]);
     await act(async () => first.respond(200, { path: 'one.txt', size: 100 }));

@@ -48,6 +48,11 @@ export function startDownload(url: string, filename: string): void {
 
 export type ConflictMode = 'rename' | 'overwrite';
 
+export type UploadConflictCheck = {
+  exists: boolean;
+  path: string;
+};
+
 export type ChatMessage = {
   id: number;
   text: string;
@@ -91,6 +96,14 @@ export class UploadConflictError extends Error {
   constructor(public readonly path: string) {
     super(`文件已存在：${path}`);
   }
+}
+
+export async function checkUploadConflict(item: UploadItem, destination: string): Promise<UploadConflictCheck> {
+  const query = new URLSearchParams({ relative_path: item.relativePath });
+  if (destination) query.set('path', destination);
+  const response = await fetch(`/api/files/conflict?${query.toString()}`);
+  if (!response.ok) throw new Error(`检查同名文件失败：HTTP ${response.status}`);
+  return response.json() as Promise<UploadConflictCheck>;
 }
 
 export type UploadProgress = {

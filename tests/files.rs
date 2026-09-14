@@ -131,3 +131,37 @@ async fn handles_upload_conflicts_with_rename_and_overwrite() {
         "newer"
     );
 }
+
+#[tokio::test]
+async fn checks_upload_conflicts_without_creating_missing_parent_directories() {
+    let directory = tempdir().expect("temporary directory should be created");
+    tokio::fs::write(directory.path().join("same.txt"), "old")
+        .await
+        .expect("file should be written");
+    let app = create_app(directory.path().to_path_buf());
+
+    let existing = request(app.clone(), "/api/files/conflict?relative_path=same.txt").await;
+    assert_eq!(existing.status(), StatusCode::OK);
+    let body = to_bytes(existing.into_body(), usize::MAX)
+        .await
+        .expect("body should be readable");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+        serde_json::json!({ "exists": true, "path": "same.txt" })
+    );
+
+    let missing = request(
+        app,
+        "/api/files/conflict?relative_path=new-folder%2Fnew.txt",
+    )
+    .await;
+    assert_eq!(missing.status(), StatusCode::OK);
+    let body = to_bytes(missing.into_body(), usize::MAX)
+        .await
+        .expect("body should be readable");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+        serde_json::json!({ "exists": false, "path": "new-folder/new.txt" })
+    );
+    assert!(!directory.path().join("new-folder").exists());
+}

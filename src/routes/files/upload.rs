@@ -23,6 +23,19 @@ pub struct UploadQuery {
     conflict: ConflictMode,
 }
 
+#[derive(Deserialize)]
+pub struct UploadCheckQuery {
+    #[serde(default)]
+    path: String,
+    relative_path: String,
+}
+
+#[derive(Serialize)]
+pub struct UploadCheckResult {
+    exists: bool,
+    path: String,
+}
+
 #[derive(Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum ConflictMode {
@@ -42,6 +55,32 @@ struct StagedUpload {
     temporary: TempPath,
     target: PathBuf,
     size: u64,
+}
+
+pub async fn check_upload(
+    State(state): State<AppState>,
+    Query(query): Query<UploadCheckQuery>,
+) -> Result<Json<UploadCheckResult>, FileError> {
+    let root = Arc::clone(&state.root);
+    let destination = query.path;
+    let relative_path = query.relative_path;
+    let check_root = Arc::clone(&root);
+    let check_relative_path = relative_path.clone();
+    tokio::task::spawn_blocking(move || {
+        check_upload_target(&check_root, &destination, &check_relative_path)
+    })
+    .await
+    .map_err(|error| FileError::Io(std::io::Error::other(error)))?
+    .map(|target| {
+        let path = target
+            .as_deref()
+            .map(|target| relative_string(&root, target))
+            .unwrap_or(relative_path);
+        Json(UploadCheckResult {
+            exists: target.is_some(),
+            path,
+        })
+    })
 }
 
 pub async fn upload_file(
@@ -186,6 +225,43 @@ fn prepare_upload(
             size: 0,
         },
     ))
+}
+
+fn check_upload_target(
+    root: &Path,
+    destination: &str,
+    relative_path: &str,
+) -> Result<Option<PathBuf>, FileError> {
+    let destination = fs::canonicalize(root.join(safe_relative_path(destination)?))?;
+    ensure_inside(root, &destination)?;
+    if !destination.is_dir() {
+        return Err(FileError::BadPath);
+    }
+
+    let relative = safe_relative_path(relative_path)?;
+    let filename = relative.file_name().ok_or(FileError::BadPath)?;
+    let mut parent = destination;
+    for component in relative.parent().ok_or(FileError::BadPath)?.components() {
+        let next = parent.join(component);
+        match fs::symlink_metadata(&next) {
+            Ok(_) => {
+                parent = fs::canonicalize(next)?;
+                ensure_inside(root, &parent)?;
+                if !parent.is_dir() {
+                    return Err(FileError::BadPath);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    let target = parent.join(filename);
+    if target_exists(root, &target)? {
+        Ok(Some(target))
+    } else {
+        Ok(None)
+    }
 }
 
 fn target_exists(root: &Path, target: &Path) -> Result<bool, FileError> {

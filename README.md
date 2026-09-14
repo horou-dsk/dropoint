@@ -238,6 +238,7 @@ File paths are relative to the shared root bound at startup. URL-encode paths us
 | GET | `/api/health` | Returns `{ "status": "ok" }` |
 | GET | `/api/info` | Shared directory name |
 | GET | `/api/files?path=...` | Directory listing; omit `path` for the root |
+| GET | `/api/files/conflict?path=...&relative_path=...` | Check whether an upload target already exists before sending the file |
 | POST | `/api/files?path=...&conflict=fail` | Multipart upload; `conflict` accepts `fail`, `rename`, or `overwrite` |
 | GET | `/api/files/download?path=...` | Single-file download with byte-range support |
 | GET | `/api/files/preview?path=...` | File preview with byte-range support |

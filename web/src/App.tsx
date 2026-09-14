@@ -4,6 +4,7 @@ import {
   type DirectoryListing,
   type FileEntry,
   UploadConflictError,
+  checkUploadConflict,
   getDirectoryInfo,
   listFiles,
   uploadFile,
@@ -203,6 +204,20 @@ export default function App() {
         let mode: ConflictMode | 'fail' = 'fail';
         while (true) {
           try {
+            if (mode === 'fail') {
+              const check = await checkUploadConflict(file, destination);
+              if (check.exists) {
+                setUploading({
+                  fileName: file.relativePath, fileIndex: index + 1, fileCount: files.length,
+                  completedFiles, completedBytes, totalBytes,
+                  progress: { loaded: 0, total: file.file.size, phase: 'uploading' },
+                  awaitingConflict: true,
+                });
+                const choice = await askConflict(check.path);
+                if (choice === 'cancel') { cancelled = true; break uploadBatch; }
+                mode = choice;
+              }
+            }
             await uploadFile(file, destination, mode, (progress) => setUploading({
               fileName: file.relativePath, fileIndex: index + 1, fileCount: files.length,
               completedFiles, completedBytes, totalBytes, progress, awaitingConflict: false,

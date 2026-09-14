@@ -28,7 +28,7 @@ mod upload;
 
 pub use archive::{create_archive, download_archive};
 pub use delete::delete_files;
-pub use upload::upload_file;
+pub use upload::{check_upload, upload_file};
 
 #[derive(Debug, Deserialize)]
 pub struct PathQuery {

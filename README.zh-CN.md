@@ -238,6 +238,7 @@ dropoint/
 | GET | `/api/health` | 返回 `{ "status": "ok" }` |
 | GET | `/api/info` | 共享目录名称 |
 | GET | `/api/files?path=...` | 列出目录；省略 `path` 表示根目录 |
+| GET | `/api/files/conflict?path=...&relative_path=...` | 上传前检查目标文件是否已存在，避免冲突文件重复传输 |
 | POST | `/api/files?path=...&conflict=fail` | multipart 上传；`conflict` 支持 `fail`、`rename`、`overwrite` |
 | GET | `/api/files/download?path=...` | 下载单文件，支持字节范围请求 |
 | GET | `/api/files/preview?path=...` | 预览文件，支持字节范围请求 |
