@@ -32,11 +32,11 @@ Rust 的 debug/release 构建均嵌入 `web/dist/`；首次运行 Cargo 前先�
 - `cargo fmt --all -- --check`：检查代码格式；使用 `cargo fmt --all` 自动格式化。
 - `cargo clippy --all-targets --all-features -- -D warnings`：检查常见 Rust 问题，并将警告视为错误。
 - `pnpm install`：安装根目录和 `web/` 的前端依赖。
-- `pnpm dev`：同时启动 Axum 后端和 Vite 前端，显式使用后端端口 `3000` 与开发代理匹配。
+- `pnpm dev`：先创建仓库根目录的 `.tmp/` 开发共享目录（已存在时保留内容），再同时启动 Axum 后端和 Vite 前端，显式使用后端端口 `5175` 与默认开发代理匹配。`.tmp/` 已由 Git 忽略。
 - `pnpm --dir web dev`：只启动前端开发服务器。
 - `pnpm --dir web test`：运行前端测试；`pnpm --dir web build`：生成生产构建。
 - `cargo run -- /path/to/share`：指定要共享的目录；省略参数时使用当前目录。
-- `cargo run -- /path/to/share --port 8080`：指定后端端口；省略 `--port` 或设置为 `0` 时由操作系统分配空闲端口，启动日志输出实际端口。单独启动 Vite 时可通过 `DROPOINT_API_PORT` 环境变量指定后端代理端口，默认 `3000`。
+- `cargo run -- /path/to/share --port 8080`：指定后端端口；省略 `--port` 或设置为 `0` 时由操作系统分配空闲端口，启动日志输出实际端口。单独启动 Vite 时可通过 `DROPOINT_API_PORT` 环境变量指定后端代理端口，默认 `5175`。
 
 ## 编码风格与命名约定
 

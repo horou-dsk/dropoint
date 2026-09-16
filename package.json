@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "pnpm@11.9.0",
   "scripts": {
-    "dev": "concurrently -k -n backend,frontend -c blue,green \"cargo run -- --port 3000\" \"pnpm --dir web exec vite --host 0.0.0.0\"",
+    "dev": "node -e \"require('node:fs').mkdirSync('.tmp', { recursive: true })\" && concurrently -k -n backend,frontend -c blue,green \"cargo run -- .tmp --port 5175\" \"pnpm --dir web exec vite --host 0.0.0.0\"",
     "check": "cargo check",
     "format:check": "cargo fmt --all -- --check",
     "lint": "cargo clippy --all-targets --all-features -- -D warnings",

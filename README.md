@@ -69,12 +69,12 @@ pnpm --dir web build
 pnpm dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173). This starts both Axum and Vite, explicitly setting the backend port to `3000` to match the development proxy. The shared directory defaults to the working directory of `cargo run`; when launched from the repository root, it shares the repository directory.
+Open [http://localhost:5173](http://localhost:5173). Before starting Axum and Vite, `pnpm dev` creates `.tmp/` in the repository root if needed and uses it as the development shared directory. Existing contents are preserved, and Git ignores this directory. The backend listens on `5175`, matching the default development proxy.
 
 | Service | Listening address with `pnpm dev` | Purpose |
 | --- | --- | --- |
 | Vite | `0.0.0.0:5173` | Web interface and `/api` HTTP/WebSocket proxy |
-| Axum | `0.0.0.0:3000` | File API and shared chat |
+| Axum | `0.0.0.0:5175` | File API and shared chat |
 
 Other devices on the same local network can open `http://<host-LAN-IP>:5173`. Use the Network address printed by Vite; if the default port is occupied, use the actual address in its output. If a device cannot connect, check that it is on the same network and that the firewall allows access to the frontend port.
 
@@ -84,13 +84,13 @@ Open two terminals at the repository root and start the backend and frontend sep
 
 ```sh
 # Terminal 1: start the backend with a shared directory
-cargo run -- /path/to/share --port 3000
+cargo run -- /path/to/share --port 5175
 ```
 
 Windows example:
 
 ```powershell
-cargo run -- "D:\Shared Files" --port 3000
+cargo run -- "D:\Shared Files" --port 5175
 ```
 
 ```sh
@@ -120,7 +120,7 @@ cargo run -- --help
 
 Port `0` also requests automatic allocation. Read the actual port from the startup message `API server listening on http://0.0.0.0:<port>` and connect using `localhost` or the host's LAN IP. An unavailable explicit port causes startup to fail rather than silently choosing another port. The port option controls Axum; Vite still defaults to `5173`.
 
-When starting Vite separately, set `DROPOINT_API_PORT` to the backend's actual port if it differs from `3000`. For a backend on port `8080`:
+When starting Vite separately, set `DROPOINT_API_PORT` to the backend's actual port if it differs from `5175`. For a backend on port `8080`:
 
 ```sh
 # macOS / Linux, in the frontend terminal

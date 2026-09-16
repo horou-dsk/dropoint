@@ -69,12 +69,12 @@ pnpm --dir web build
 pnpm dev
 ```
 
-打开 [http://localhost:5173](http://localhost:5173)。此命令同时启动 Axum 和 Vite，并显式指定后端端口为 `3000`，与开发代理保持一致。默认共享运行 `cargo run` 时的当前工作目录；从仓库根目录启动时，共享的就是仓库目录。
+打开 [http://localhost:5173](http://localhost:5173)。`pnpm dev` 会先在仓库根目录创建 `.tmp/`（如果不存在），将其作为开发共享目录，再启动 Axum 和 Vite。已有目录中的内容会保留，该目录已被 Git 忽略。后端监听 `5175`，与默认开发代理保持一致。
 
 | 服务 | `pnpm dev` 的监听地址 | 用途 |
 | --- | --- | --- |
 | Vite | `0.0.0.0:5173` | 网页及 `/api` HTTP/WebSocket 代理 |
-| Axum | `0.0.0.0:3000` | 文件 API 与共享对话 |
+| Axum | `0.0.0.0:5175` | 文件 API 与共享对话 |
 
 同一局域网的其他设备访问 `http://<运行主机的局域网 IP>:5173`。使用 Vite 启动日志中的 Network 地址；若端口被占用，以实际输出地址为准。连接失败时，检查设备是否位于同一网络，以及防火墙是否允许前端端口访问。
 
@@ -84,13 +84,13 @@ pnpm dev
 
 ```sh
 # 终端 1：启动后端，指定共享目录
-cargo run -- /path/to/share --port 3000
+cargo run -- /path/to/share --port 5175
 ```
 
 Windows 示例：
 
 ```powershell
-cargo run -- "D:\Shared Files" --port 3000
+cargo run -- "D:\Shared Files" --port 5175
 ```
 
 ```sh
@@ -120,7 +120,7 @@ cargo run -- --help
 
 端口 `0` 也表示自动分配。启动日志 `API server listening on http://0.0.0.0:<port>` 会输出实际端口，访问时使用 `localhost` 或运行主机的局域网 IP。显式指定的端口不可用时，程序会报错退出，不会静默切换端口。此参数控制 Axum，Vite 仍默认使用 `5173`。
 
-单独启动 Vite 时，如果后端端口不是 `3000`，需通过 `DROPOINT_API_PORT` 设置代理端口。以后端监听 `8080` 为例：
+单独启动 Vite 时，如果后端端口不是 `5175`，需通过 `DROPOINT_API_PORT` 设置代理端口。以后端监听 `8080` 为例：
 
 ```sh
 # macOS / Linux，在前端终端执行
