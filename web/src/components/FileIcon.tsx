@@ -1,6 +1,6 @@
 import type { FileEntry } from '../lib/api';
 
-export default function FileIcon({ entry, className = 'h-12 w-12' }: { entry: FileEntry; className?: string }) {
+export default function FileIcon({ entry, className = 'h-12 w-12' }: { entry: Pick<FileEntry, 'kind' | 'mime'>; className?: string }) {
   if (entry.kind === 'directory') {
     return (
       <svg className={`${className} shrink-0 drop-shadow-sm`} viewBox="0 0 48 48" fill="none" aria-hidden="true">

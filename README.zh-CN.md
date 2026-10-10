@@ -2,7 +2,7 @@
 
 [English](README.md) | **中文**
 
-Dropoint 是一个局域网文件共享与文本传递工具。启动时绑定一个本地目录，即可在浏览器中浏览、预览、上传和下载文件，并通过共享对话在多台设备之间传递文字。
+Dropoint 是一个局域网文件、文字与媒体传递工具。启动时绑定一个本地目录，即可在浏览器中浏览、预览、上传和下载文件，并通过共享对话在多台设备之间传递消息和附件。
 
 ## 功能
 
@@ -11,7 +11,7 @@ Dropoint 是一个局域网文件共享与文本传递工具。启动时绑定�
 - **多选与右键菜单**：支持 Ctrl/Cmd 多选、Shift 连选，通过右键菜单或工具栏执行下载和删除。
 - **批量下载**：单个文件直接下载；文件夹或多个项目合并为 ZIP，保留目录层级、中文文件名和空目录。
 - **拖拽上传**：支持拖入多个文件或文件夹，上传到当前浏览目录。同名冲突时可选择自动重命名、覆盖或取消。
-- **共享对话**：通过 WebSocket 同步文本，提供连接状态、自动重连和单条消息复制；服务端保留最近 200 条消息，重启后清空。
+- **共享对话**：支持文字、图片、视频、音频及普通文件。可粘贴截图和文件或选择多个附件，预览并编辑草稿后发送；通过 WebSocket 实时同步，提供连接状态、自动重连、文字复制、媒体预览和下载。服务端保留最近 200 条消息，重启后清空。
 - **上传进度**：显示当前文件及按大小加权的批量总进度、已传输大小；传输完成后等待服务端确认保存，保留成功、失败和取消结果。同名文件仍可重命名或覆盖，重试时重置当前文件进度。
 - **外观与布局**：默认跟随系统亮色或深色模式，手动切换后保存选择。文件与聊天面板独立滚动，窄屏可切换工作面板。
 
@@ -147,11 +147,14 @@ pnpm --dir web dev
 | 双击项目 | 进入文件夹或打开文件预览 |
 | 右键项目 | 打开/预览、下载、删除；多选时显示批量操作 |
 | 右键空白处 | 刷新、全选、取消选择 |
-| 聊天中 Enter / Shift + Enter | 发送文本 / 换行 |
+| 聊天中粘贴文件 / 点击 ＋ | 添加待发送附件，每条消息最多 10 个 |
+| 聊天中 Enter / Shift + Enter | 发送草稿 / 换行 |
 
 多选仅限当前目录。切换视图和排序保留选区，进入其他目录会清空选区；刷新会移除已不存在的选中项。右键已选项目时保留整个选区。
 
 文件列表通过刷新按钮重新读取；聊天文本实时广播。主题和视图偏好保存在当前浏览器中，不会跨设备同步。当前网页界面使用中文。
+
+聊天附件先进入待发送区，可添加文字、移除文件，也可只发送附件。点击发送后逐个上传，显示当前文件和整体进度，收到服务端确认后才清空草稿。发送期间每分钟续期发送凭证并保留已上传附件，避免后续文件传输较慢时前面的文件过期。失败时保留文字和附件，重试复用已上传成功的文件；已过期的未提交附件会自动重新上传。粘贴依赖浏览器提供文件数据；剪贴板只有文件路径文字时，请使用附件选择按钮。图片缩略图可点击查看大图，视频和音频使用浏览器原生播放控件；所有附件均可下载，媒体加载或解码失败时也有下载入口。文件按原始内容发送，不压缩、不转码。
 
 ## 使用限制
 
@@ -160,7 +163,10 @@ pnpm --dir web dev
 - 每次上传请求的请求体上限为 **1 GiB**，包含 multipart 开销；前端逐个上传文件。文件夹拖拽依赖浏览器支持，视频预览依赖浏览器支持相应编码。
 - ZIP 在共享目录外的系统临时目录中生成，需要足够的临时磁盘空间。下载地址有效期为 **10 分钟**；已开始的下载可继续完成。若系统临时目录位于共享目录内，打包请求会被拒绝。
 - ZIP 打包遇到符号链接或 Windows junction 会报错。删除链接时仅移除链接本身，不删除链接目标；批量操作不允许通过链接进入子目录。
-- 聊天记录仅保存在进程内存中，单条文本最多 **10,000 个字符**；服务重启后历史记录清空。
+- 聊天记录仅保存在进程内存中，每条消息最多 **10,000 个字符**和 **10 个附件**。附件存放在共享目录外的独立系统临时目录，需要足够的临时磁盘空间。未提交的附件在上传完成或发送期间最后一次续期的 **10 分钟**后过期；已发送附件由最近 **200 条消息**或正在发送的草稿保留，最后一个引用移除后删除。已开始的下载可继续完成；服务重启后聊天历史、附件 ID 和发送凭证全部失效。若系统临时目录位于共享目录内，聊天附件上传会被拒绝。
+- 按 Ctrl+C（Unix 也支持 SIGTERM）后停止接受新连接，最多等待 **10 秒**让在途请求完成。再次收到退出信号或等待超时，会取消剩余请求并退出，同时清理临时附件和归档。强行关闭终端或杀死进程可能使清理无法完成。
+- 发送凭证连续 **10 分钟**未续期就失效。幂等确认缓存最多保存 **1,000 条待发送或已确认记录**；确认响应在提交 **30 分钟**后过期，也可能因容量限制提前淘汰。确认失效后无法安全重试，请先查看聊天记录，必要时修改保留的草稿，作为新消息发送。
+- HTML、SVG 等主动内容仅作为普通聊天附件下载。可预览的图片、音视频使用安全 MIME 白名单及 `nosniff`；能否播放仍取决于浏览器支持的编码。
 
 ## 开发与构建
 
@@ -188,7 +194,7 @@ cargo build --release --locked
 
 程序位于 `target/release/dropoint`（Windows 为 `dropoint.exe`）。`rust-embed` 在 debug 和 release 构建中都将 `web/dist/` 编译进程序；Axum 在同一端口提供网页、`/api/*` 和聊天 WebSocket。前端修改后需先重新构建前端，再编译 Rust；`build.rs` 会跟踪资源的新增、删除和修改。开发时仍可使用 Vite 在 `5173` 端口提供热更新。
 
-运行 `node web/scripts/smoke-release.mjs target/release/dropoint`（Windows 追加 `.exe`）可验证发布程序。脚本仅将二进制复制到临时目录，绑定另一个共享目录启动，检查内嵌页面、JS/CSS、SPA fallback、API 404、健康接口、上传下载与 WebSocket 聊天，最后停止程序并清理临时文件。
+运行 `node web/scripts/smoke-release.mjs target/release/dropoint`（Windows 追加 `.exe`）可验证发布程序。脚本仅将二进制复制到临时目录，绑定另一个共享目录启动，检查内嵌页面、JS/CSS、SPA fallback、API 404、健康接口、文件上传下载、文字和媒体广播、重复消息提交去重，以及附件预览、下载、HEAD 和 Range，最后停止程序并清理临时文件。
 
 Windows 下若运行中的程序锁定测试构建产物，可使用 `cargo test --target-dir target/verification`。
 
@@ -245,8 +251,32 @@ dropoint/
 | POST | `/api/files/archive` | JSON `{ "paths": [...] }`，返回下载地址 `url` 和文件名 `filename` |
 | GET | `/api/files/archive/{id}` | 下载生成的 ZIP |
 | POST | `/api/files/delete` | JSON `{ "paths": [...] }`，返回 `deleted` 和 `failed` |
+| POST | `/api/chat/attachments` | 单个 multipart `file` 字段，返回附件元数据 |
+| GET / HEAD | `/api/chat/attachments/{id}/preview` | 安全媒体预览，支持字节范围；其他类型返回 415 |
+| GET / HEAD | `/api/chat/attachments/{id}/download` | 使用原文件名下载，支持字节范围 |
+| POST | `/api/chat/messages/prepare` | JSON `{ "clientMessageId": "..." }`，返回 `submissionToken` |
+| POST | `/api/chat/messages/keepalive` | 续期待发送凭证并保留已上传附件，返回 204 |
+| POST | `/api/chat/messages` | 提交文字和附件消息，返回确认并通过 WebSocket 广播 |
 | WebSocket | `/api/chat` | 共享对话，连接时发送历史消息 |
 
 上传时先提交 `relative_path` 文本字段，再提交单个 `file` 文件字段；省略 `relative_path` 时使用上传文件名。同名冲突默认返回 `409 Conflict`。
 
-聊天客户端发送 `{ "type": "send", "text": "hello" }`；服务端发送 `{ "type": "history", "messages": [...] }` 或 `{ "type": "message", "message": ... }`。每条消息包含 `id`、`text` 和以 Unix 毫秒表示的 `timestamp`。
+现有聊天客户端仍可通过 WebSocket 发送 `{ "type": "send", "text": "hello" }`；服务端发送 `{ "type": "history", "messages": [...] }` 或 `{ "type": "message", "message": ... }`。每条消息包含 `id`、`text`、以 Unix 毫秒表示的 `timestamp` 及 `attachments` 数组（纯文字消息为空）。
+
+聊天附件每次上传单个 multipart `file`，请求体 **1 GiB** 上限包含 multipart 开销。返回元数据为 `id`、`name`、`size`、`mime`、`previewUrl`（不可预览时为 null）和 `downloadUrl`。ID 与存储路径由服务端生成，文件名仅用于展示和下载；未知或已过期的下载 ID 返回 404。
+
+发送前使用稳定的客户端标识（1–128 位 ASCII 字母、数字、连字符或下划线）调用 `POST /api/chat/messages/prepare`，保留返回的 `submissionToken`，同一草稿重试时复用。记录保留期间，重复准备返回同一凭证。上传期间每分钟及每个文件上传完成后调用 `POST /api/chat/messages/keepalive`：
+
+```json
+{ "clientMessageId": "unique-client-id", "submissionToken": "server-issued-token", "attachmentIds": ["uploaded-attachment-id"] }
+```
+
+第一个文件传输时可传空附件列表；后续续期包含全部已完成的附件。只有待发送凭证保留附件，已确认消息续期不会延长缓存或文件生命周期。停止续期 10 分钟后释放待发送引用。若缓存中的 1,000 条记录全部处于待发送状态，准备新消息返回 429（`submission_capacity`）；否则可淘汰最早的确认记录以接纳新消息。
+
+通过 `POST /api/chat/messages` 提交完整草稿：
+
+```json
+{ "clientMessageId": "unique-client-id", "submissionToken": "server-issued-token", "text": "说明文字", "attachmentIds": ["uploaded-attachment-id"] }
+```
+
+接口返回完整消息。在有界的确认窗口内，相同标识、凭证及规范化内容返回原响应，不重复广播；内容不同则返回 409。确认记录不延长已淘汰附件的文件生命周期。未知、过期或已淘汰的凭证返回 410（`submission_expired`），不会重新发布；提交结果不确定时，不应申请新凭证直接重试，应先查看历史再主动开始新消息。附件失效时返回 410，包含 `code: "attachment_unavailable"` 及 `attachmentIds`，需重新上传这些文件后重试。空消息、重复附件 ID 或超过文字及附件数量限制返回 400。客户端应按消息 `id` 对 HTTP 响应及 WebSocket 事件去重。

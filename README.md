@@ -2,7 +2,7 @@
 
 **English** | [中文](README.zh-CN.md)
 
-Dropoint is a local network tool for sharing files and text. Bind a local directory at startup, then browse, preview, upload, and download files in your browser. Use the shared chat panel to pass text between devices.
+Dropoint is a local network tool for sharing files, text, and media. Bind a local directory at startup, then browse, preview, upload, and download files in your browser. Use the shared chat panel to pass messages and attachments between devices.
 
 ## Features
 
@@ -11,7 +11,7 @@ Dropoint is a local network tool for sharing files and text. Bind a local direct
 - **Selection and context menus**: Use Ctrl/Cmd to toggle selection and Shift to select a range. Download or delete selected items from the context menu or toolbar.
 - **Batch downloads**: Download a single file directly, or combine folders and multiple items into one ZIP that preserves hierarchy, Unicode filenames, and empty directories.
 - **Drag-and-drop uploads**: Drop multiple files or folders into the current directory. Resolve filename conflicts by automatically renaming, overwriting, or cancelling.
-- **Shared chat**: Synchronize text over WebSocket, with connection status, automatic reconnection, and per-message copying. The server retains the latest 200 messages in memory and clears them on restart.
+- **Shared chat**: Send text, images, videos, audio, and other files. Paste screenshots/files or select multiple attachments, preview and edit the draft, then send. Messages synchronize over WebSocket, with connection status, reconnection, copying, media previews, and downloads. The server retains the latest 200 messages and clears them on restart.
 - **Upload progress**: Show current-file and byte-weighted batch progress with transferred sizes. After transmission, wait for the server to confirm saving; retain success, failure and cancellation results. Conflicting files can still be renamed or overwritten, with progress reset for each retry.
 - **Appearance and layout**: Follow the system light/dark theme by default and remember manual overrides. File and chat panels scroll independently; switch between panels on narrow screens.
 
@@ -147,11 +147,14 @@ For an automatically assigned port, substitute the value printed by the backend.
 | Double-click an item | Enter a folder or open a file preview |
 | Right-click an item | Open/preview, download, or delete; multiple selections show batch actions |
 | Right-click empty space | Refresh, select all, or clear selection |
-| Enter / Shift + Enter in chat | Send text / insert a line break |
+| Paste files in chat / click ＋ | Add draft attachments; up to 10 per message |
+| Enter / Shift + Enter in chat | Send the draft / insert a line break |
 
 Selections are limited to the current directory. Changing the view or sort order preserves selection; navigating to another directory clears it. Refreshing removes selections for items that no longer exist. Right-clicking a selected item preserves the whole selection.
 
 Use Refresh to reload the file listing; chat messages are broadcast in real time. Theme and view preferences are stored in the current browser and do not synchronize across devices. The web interface currently uses Chinese labels.
+
+Chat attachments are staged before sending: you can add a caption, remove files, or send attachments alone. Sending uploads files sequentially with current-file and overall progress, then waits for server confirmation. During sending, the browser renews the reservation and retains uploaded files every minute, so a slow subsequent upload does not expire earlier files. Failed submissions preserve the draft and reuse successful uploads on retry; expired unpublished files are reuploaded automatically. Clipboard support depends on the browser providing file data; when it provides only a path as text, use the attachment picker. Image thumbnails open a full-size preview; video and audio use native browser controls. Every attachment has a download link, including media that cannot be decoded by the browser. Files are sent unchanged, without compression or transcoding.
 
 ## Limitations
 
@@ -160,7 +163,10 @@ Use Refresh to reload the file listing; chat messages are broadcast in real time
 - Each upload request body is limited to **1 GiB**, including multipart overhead. The frontend uploads files individually. Folder drag-and-drop depends on browser support, and video previews depend on supported codecs.
 - ZIP files are generated in the system temporary directory outside the shared root and require available temporary disk space. Download URLs expire after **10 minutes**, while downloads already in progress can finish. Archiving is rejected if the system temporary directory is inside the shared root.
 - ZIP creation rejects symbolic links and Windows junctions. Deleting a link removes only the link, leaving its target intact; batch operations cannot traverse a link to access descendants.
-- Chat history exists only in process memory. Each message is limited to **10,000 characters**, and restarting the server clears the history.
+- Chat history exists only in process memory. Each message is limited to **10,000 characters** and **10 attachments**. Attachments use a separate system temporary directory outside the shared root, requiring available disk space. Unpublished uploads expire **10 minutes after upload completion**, or after the last renewal while sending. Published files remain available while referenced by the latest **200 messages** or an active sending reservation. Removing the last reference deletes the file; downloads already in progress can finish. Restarting invalidates all chat history, attachment IDs, and submission tokens. Uploading chat attachments is rejected if the system temporary directory is inside the shared root.
+- Ctrl+C (or SIGTERM on Unix) stops accepting connections and allows active requests up to **10 seconds** to finish. A second signal, or expiration of that grace period, cancels remaining requests and exits, cleaning up temporary attachments and archives. Closing the terminal forcibly or killing the process may prevent cleanup.
+- Sending reservations expire after **10 minutes without renewal**. The confirmation cache retains at most **1,000 pending/confirmed records**; confirmed responses expire **30 minutes after submission** and may be evicted earlier under capacity pressure. An expired confirmation cannot be safely retried: check the chat history, then edit the retained draft to send it as a new message if needed.
+- HTML, SVG, and other active document formats are download-only chat attachments. Previewable image/audio/video formats use a safe MIME allowlist and `nosniff`; playback still depends on browser codec support.
 
 ## Development and builds
 
@@ -188,7 +194,7 @@ cargo build --release --locked
 
 The executable is `target/release/dropoint` (`dropoint.exe` on Windows). `rust-embed` compiles `web/dist/` into the executable in both debug and release builds. Axum serves the web interface, `/api/*` and the chat WebSocket on the same port. Rebuild the frontend and then Rust after frontend changes; `build.rs` tracks added, removed and modified assets. During development, Vite still provides hot reload on port `5173`.
 
-Run the release smoke test with `node web/scripts/smoke-release.mjs target/release/dropoint` (append `.exe` on Windows). It copies only the executable into a temporary directory, starts it against a separate shared directory, checks the embedded page, JS/CSS, SPA fallback, API 404s, health, uploads/downloads and WebSocket chat, then stops it and removes its temporary files.
+Run the release smoke test with `node web/scripts/smoke-release.mjs target/release/dropoint` (append `.exe` on Windows). It copies only the executable into a temporary directory, starts it against a separate shared directory, checks the embedded page, JS/CSS, SPA fallback, API 404s, health, file uploads/downloads, chat text/media broadcasts, idempotent message submission, and attachment preview/download/HEAD/Range, then stops it and removes its temporary files.
 
 On Windows, if a running process locks the test build output, use `cargo test --target-dir target/verification`.
 
@@ -245,8 +251,32 @@ File paths are relative to the shared root bound at startup. URL-encode paths us
 | POST | `/api/files/archive` | JSON `{ "paths": [...] }`; returns download `url` and `filename` |
 | GET | `/api/files/archive/{id}` | Download a generated ZIP |
 | POST | `/api/files/delete` | JSON `{ "paths": [...] }`; returns `deleted` and `failed` |
+| POST | `/api/chat/attachments` | One multipart `file`; returns attachment metadata |
+| GET / HEAD | `/api/chat/attachments/{id}/preview` | Safe media preview, supports byte ranges; other formats return 415 |
+| GET / HEAD | `/api/chat/attachments/{id}/download` | Original filename download, supports byte ranges |
+| POST | `/api/chat/messages/prepare` | JSON `{ "clientMessageId": "..." }`; returns `submissionToken` |
+| POST | `/api/chat/messages/keepalive` | Renew a pending sending reservation and retain uploaded attachments; returns 204 |
+| POST | `/api/chat/messages` | Confirmed text/attachment message submission and WebSocket broadcast |
 | WebSocket | `/api/chat` | Shared chat; sends history on connection |
 
 For uploads, send the `relative_path` text field before a single `file` field. If `relative_path` is omitted, the uploaded filename is used. Filename conflicts return `409 Conflict` by default.
 
-Chat clients send `{ "type": "send", "text": "hello" }`. The server sends `{ "type": "history", "messages": [...] }` or `{ "type": "message", "message": ... }`. Each message contains `id`, `text`, and a Unix-millisecond `timestamp`.
+Legacy chat clients can still send `{ "type": "send", "text": "hello" }` over WebSocket. The server sends `{ "type": "history", "messages": [...] }` or `{ "type": "message", "message": ... }`. Each message contains `id`, `text`, a Unix-millisecond `timestamp`, and `attachments` (empty for plain text).
+
+Upload each chat attachment as a single multipart `file` (the **1 GiB** request limit includes the multipart envelope). Metadata contains `id`, `name`, `size`, `mime`, `previewUrl` (null for download-only formats), and `downloadUrl`. IDs and storage paths are generated by the server; filenames are display/download metadata only. Unknown or expired download IDs return 404.
+
+Before sending, reserve a stable client ID (1–128 ASCII letters, digits, hyphens or underscores) with `POST /api/chat/messages/prepare`. Keep the returned `submissionToken` for every retry of that draft. Preparation is idempotent while its record is retained. During uploads, call `POST /api/chat/messages/keepalive` every minute and after each completed file:
+
+```json
+{ "clientMessageId": "unique-client-id", "submissionToken": "server-issued-token", "attachmentIds": ["uploaded-attachment-id"] }
+```
+
+An empty attachment list renews the reservation while the first file uploads. Include all completed attachments in subsequent renewals. Only pending reservations pin files; renewal of a confirmed message does not extend cache or file retention. Stopping renewal releases pending references after 10 minutes. If all 1,000 cache entries are pending, preparing another message returns 429 (`submission_capacity`); otherwise the oldest confirmation can be evicted to admit it.
+
+Submit the completed draft with `POST /api/chat/messages`:
+
+```json
+{ "clientMessageId": "unique-client-id", "submissionToken": "server-issued-token", "text": "caption", "attachmentIds": ["uploaded-attachment-id"] }
+```
+
+The response is the complete message. Within the bounded confirmation window, identical normalized content under the same ID and token returns the original response without another broadcast; different content returns 409. Confirmations do not keep evicted files alive. Unknown, expired, or evicted tokens return 410 (`submission_expired`) and never publish another message. Do not prepare a new token to retry an uncertain commit; inspect the history before deliberately starting a new message. Unavailable attachments return 410 with `code: "attachment_unavailable"` and `attachmentIds`; upload those files again before retrying. Empty messages, duplicate IDs, and messages exceeding text/attachment limits return 400. Clients should deduplicate HTTP responses and WebSocket events by message `id`.

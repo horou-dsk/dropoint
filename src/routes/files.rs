@@ -23,7 +23,7 @@ use crate::state::AppState;
 pub(crate) mod archive;
 mod batch;
 mod delete;
-mod range;
+pub(crate) mod range;
 mod upload;
 
 pub use archive::{create_archive, download_archive};

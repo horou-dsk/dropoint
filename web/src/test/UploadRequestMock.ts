@@ -15,6 +15,7 @@ export class UploadRequestMock {
   responseType = '';
   open = vi.fn();
   send = vi.fn();
+  abort = vi.fn(() => this.onabort?.());
 
   constructor() { UploadRequestMock.requests.push(this); }
 

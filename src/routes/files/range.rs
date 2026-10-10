@@ -1,12 +1,12 @@
 use axum::http::{HeaderMap, header};
 
-pub(super) enum Selection {
+pub(crate) enum Selection {
     Full,
     Partial { start: u64, end: u64 },
     Unsatisfiable,
 }
 
-pub(super) fn select(headers: &HeaderMap, size: u64) -> Selection {
+pub(crate) fn select(headers: &HeaderMap, size: u64) -> Selection {
     // No validators are emitted yet, so an If-Range condition cannot be matched.
     if headers.contains_key(header::IF_RANGE) {
         return Selection::Full;

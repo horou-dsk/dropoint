@@ -401,7 +401,7 @@ export default function App() {
         </div>
       </div>
 
-      {preview && <PreviewDialog key={preview.path} entry={preview} onClose={() => setPreview(null)} />}
+      {preview && <PreviewDialog key={preview.path} entry={preview} previewUrl={fileUrl(preview.path)} downloadUrl={fileUrl(preview.path, 'download')} onClose={() => setPreview(null)} />}
       {menu && <ContextMenu position={menu.position} items={menuItems} onClose={closeMenu} />}
       {deleteTargets && <DeleteDialog entries={deleteTargets} busy={deleting} onCancel={() => setDeleteTargets(null)} onConfirm={() => void confirmDelete()} />}
       {conflict && (

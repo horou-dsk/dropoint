@@ -10,6 +10,34 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::{AppState, ChatMessage};
 
+pub(crate) mod attachments;
+
+pub(crate) async fn prepare_message(
+    State(state): State<AppState>,
+    axum::Json(request): axum::Json<crate::state::PrepareMessageRequest>,
+) -> Result<axum::Json<crate::state::PreparedMessage>, crate::state::ChatError> {
+    state
+        .chat
+        .prepare(request.client_message_id)
+        .await
+        .map(axum::Json)
+}
+
+pub(crate) async fn keep_message_alive(
+    State(state): State<AppState>,
+    axum::Json(request): axum::Json<crate::state::KeepAliveRequest>,
+) -> Result<axum::http::StatusCode, crate::state::ChatError> {
+    state.chat.keep_alive(request).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn submit_message(
+    State(state): State<AppState>,
+    axum::Json(request): axum::Json<crate::state::MessageRequest>,
+) -> Result<axum::Json<ChatMessage>, crate::state::ChatError> {
+    state.chat.submit(request).await.map(axum::Json)
+}
+
 const MAX_CHAT_MESSAGE_LENGTH: usize = 10_000;
 
 #[derive(Debug, Deserialize)]
@@ -81,4 +109,106 @@ async fn send_event(
                 .into(),
         ))
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        Router,
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    use serde_json::{Value, json};
+    use tower::ServiceExt;
+
+    async fn post(app: &Router, path: &str, payload: Value) -> (StatusCode, Value) {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn prepares_and_renews_through_http_and_rejects_expired_confirmation_retries() {
+        let root = tempfile::tempdir().unwrap();
+        let app = crate::app::create_app(root.path().into());
+        assert_eq!(
+            post(
+                &app,
+                "/api/chat/messages/prepare",
+                json!({"clientMessageId":""})
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        let (status, prepared) = post(
+            &app,
+            "/api/chat/messages/prepare",
+            json!({"clientMessageId":"http"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            post(
+                &app,
+                "/api/chat/messages/prepare",
+                json!({"clientMessageId":"http"})
+            )
+            .await
+            .1,
+            prepared
+        );
+        let token = prepared["submissionToken"].as_str().unwrap();
+        let credentials = json!({"clientMessageId":"http", "submissionToken":token});
+        assert_eq!(
+            post(&app, "/api/chat/messages/keepalive", credentials.clone())
+                .await
+                .0,
+            StatusCode::NO_CONTENT
+        );
+        let mut missing = credentials.clone();
+        missing["attachmentIds"] = json!(["missing"]);
+        let (status, error) = post(&app, "/api/chat/messages/keepalive", missing).await;
+        assert_eq!(status, StatusCode::GONE);
+        assert_eq!(error["code"], "attachment_unavailable");
+        let mut wrong = credentials.clone();
+        wrong["submissionToken"] = json!("wrong");
+        assert_eq!(
+            post(&app, "/api/chat/messages/keepalive", wrong).await.1["code"],
+            "submission_expired"
+        );
+        let mut payload = credentials;
+        payload["text"] = json!("hello");
+        let (status, message) = post(&app, "/api/chat/messages", payload.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            post(&app, "/api/chat/messages", payload.clone()).await.1,
+            message
+        );
+        let mut different = payload.clone();
+        different["text"] = json!("changed");
+        assert_eq!(
+            post(&app, "/api/chat/messages", different).await.0,
+            StatusCode::CONFLICT
+        );
+        tokio::time::advance(std::time::Duration::from_secs(30 * 60)).await;
+        let (status, error) = post(&app, "/api/chat/messages", payload).await;
+        assert_eq!(status, StatusCode::GONE);
+        assert_eq!(error["code"], "submission_expired");
+    }
 }

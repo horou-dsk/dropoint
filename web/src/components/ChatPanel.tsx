@@ -1,5 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ChatMessage } from '../lib/api';
+import { useRef, useState } from 'react';
+import type { ChatAttachment, ChatMessage } from '../lib/api';
+import { useChat } from '../lib/useChat';
+import { useChatDraft } from '../lib/useChatDraft';
+import { formatSize } from '../lib/files';
+import ChatAttachmentCard from './ChatAttachmentCard';
+import FileIcon from './FileIcon';
+import PreviewDialog from './PreviewDialog';
+import UploadProgress from './UploadProgress';
 
 async function copyText(text: string): Promise<void> {
   if (navigator.clipboard) {
@@ -16,64 +23,16 @@ async function copyText(text: string): Promise<void> {
   textarea.remove();
 }
 
-function useChat() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [status, setStatus] = useState<'connecting' | 'connected' | 'offline'>('connecting');
-  const socketRef = useRef<WebSocket | null>(null);
-
-  useEffect(() => {
-    let stopped = false;
-    let retry: number | undefined;
-    const connect = () => {
-      if (stopped) return;
-      setStatus('connecting');
-      const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      const socket = new WebSocket(`${scheme}://${window.location.host}/api/chat`);
-      socketRef.current = socket;
-      socket.onopen = () => setStatus('connected');
-      socket.onmessage = (event) => {
-        const data = JSON.parse(event.data) as { type: 'history'; messages: ChatMessage[] } | { type: 'message'; message: ChatMessage };
-        if (data.type === 'history') setMessages(data.messages);
-        else setMessages((current) => current.some((message) => message.id === data.message.id) ? current : [...current, data.message]);
-      };
-      socket.onclose = () => {
-        if (!stopped) {
-          setStatus('offline');
-          retry = window.setTimeout(connect, 2500);
-        }
-      };
-    };
-    connect();
-    return () => {
-      stopped = true;
-      if (retry) window.clearTimeout(retry);
-      socketRef.current?.close();
-    };
-  }, []);
-
-  const send = useCallback((text: string) => {
-    const socket = socketRef.current;
-    if (socket?.readyState !== WebSocket.OPEN) return false;
-    try {
-      socket.send(JSON.stringify({ type: 'send', text }));
-      return true;
-    } catch {
-      return false;
-    }
-  }, []);
-  return { messages, status, send };
-}
-
-
 export default function ChatPanel() {
-  const { messages, status, send } = useChat();
-  const [draft, setDraft] = useState('');
+  const { messages, status, confirm, isConnected } = useChat();
+  const draft = useChatDraft(confirm);
+  const picker = useRef<HTMLInputElement>(null);
+  const [preview, setPreview] = useState<ChatAttachment | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
   const composing = useRef(false);
 
   const submit = () => {
-    const text = draft.trim();
-    if (text && send(text)) setDraft('');
+    if (isConnected()) void draft.submit();
   };
 
   const copy = async (message: ChatMessage) => {
@@ -91,26 +50,51 @@ export default function ChatPanel() {
         </span>
       </header>
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3">
-        {messages.length === 0 && <p className="rounded-lg bg-surface p-3 text-xs leading-6 text-muted">把想在多台设备之间传递的文字放在这里吧。</p>}
+        {messages.length === 0 && <p className="rounded-lg bg-surface p-3 text-xs leading-6 text-muted">在这里传递文字、图片和文件。可直接粘贴截图或选择附件。</p>}
         {messages.map((message) => (
           <div key={message.id} className="rounded-lg bg-surface p-3 text-[13px] text-ink">
-            <div className="flex items-start justify-between gap-2">
+            {message.text && <div className="flex items-start justify-between gap-2">
               <p className="min-w-0 whitespace-pre-wrap leading-6 [overflow-wrap:anywhere]">{message.text}</p>
               <button className="shrink-0 rounded px-1 py-1 text-xs text-accent hover:bg-hover" onClick={() => void copy(message)}>
                 {copied === message.id ? '已复制' : '复制'}
               </button>
-            </div>
+            </div>}
+            {message.attachments.length > 0 && <div className="mt-2 space-y-2">
+              {message.attachments.map((attachment) => <ChatAttachmentCard key={attachment.id} attachment={attachment} onPreview={() => setPreview(attachment)} />)}
+            </div>}
             <p className="mt-2 text-[11px] text-muted">{new Date(message.timestamp).toLocaleTimeString()}</p>
           </div>
         ))}
       </div>
       <div className="m-3 mt-0 shrink-0 rounded-lg border border-line bg-panel p-2 focus-within:border-accent">
+        {draft.attachments.length > 0 && <ul aria-label="待发送附件" className="mb-2 max-h-48 space-y-2 overflow-y-auto">
+          {draft.attachments.map((item) => <li key={item.key} className="flex min-w-0 items-center gap-2 rounded bg-surface p-2">
+            {item.preview ? <img className="h-10 w-10 shrink-0 rounded object-cover" src={item.preview} alt={item.file.name} />
+              : <FileIcon entry={{ kind: 'file', mime: item.file.type }} className="h-8 w-8" />}
+            <div className="min-w-0 flex-1 text-xs"><p className="truncate" title={item.file.name}>{item.file.name}</p>
+              <p className="mt-1 text-[11px] text-muted">{formatSize(item.file.size)}{item.uploaded ? ' · 已上传' : ''}</p></div>
+            <button className="icon-button shrink-0" aria-label={`移除 ${item.file.name}`} disabled={draft.busy} onClick={() => draft.remove(item.key)}>×</button>
+          </li>)}
+        </ul>}
+        {draft.progress && <UploadProgress status={draft.progress} />}
+        {draft.busy && !draft.progress && <p role="status" className="mb-2 text-xs text-accent">正在发送，等待服务端确认…</p>}
+        {draft.error && <p role="alert" className="mb-2 text-xs text-red-600 dark:text-red-400">{draft.error}</p>}
         <textarea
           aria-label="聊天内容"
           className="h-14 w-full resize-none bg-transparent px-1 text-sm text-ink outline-none placeholder:text-muted"
-          placeholder="写点什么，回车发送…"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          placeholder="写点什么，或粘贴图片和文件…"
+          value={draft.text}
+          disabled={draft.busy}
+          onChange={(event) => draft.changeText(event.target.value)}
+          onPaste={(event) => {
+            const files = Array.from(event.clipboardData.files);
+            if (files.length === 0) {
+              for (const item of Array.from(event.clipboardData.items || [])) {
+                if (item.kind === 'file') { const file = item.getAsFile(); if (file) files.push(file); }
+              }
+            }
+            if (files.length) { event.preventDefault(); draft.addFiles(files); }
+          }}
           onCompositionStart={() => { composing.current = true; }}
           onCompositionEnd={() => { composing.current = false; }}
           onKeyDown={(event) => {
@@ -122,10 +106,18 @@ export default function ChatPanel() {
           }}
         />
         <div className="flex items-center justify-between">
-          <span className="text-[10px] text-muted">Shift + Enter 换行</span>
-          <button className="primary-button" onClick={submit} disabled={!draft.trim() || status !== 'connected'}>发送</button>
+          <div className="flex min-w-0 items-center gap-2">
+            <input ref={picker} className="hidden" aria-label="选择聊天附件" type="file" multiple disabled={draft.busy} onChange={(event) => {
+              draft.addFiles(Array.from(event.target.files || [])); event.target.value = '';
+            }} />
+            <button className="icon-button text-xs" aria-label="添加附件" title="添加附件（最多 10 个）" disabled={draft.busy} onClick={() => picker.current?.click()}>＋</button>
+            <span className="text-[10px] text-muted">{draft.attachments.length ? `${draft.attachments.length}/10 个附件` : 'Shift + Enter 换行'}</span>
+          </div>
+          <button className="primary-button" onClick={submit} disabled={draft.busy || (!draft.text.trim() && draft.attachments.length === 0) || status !== 'connected'}>发送</button>
         </div>
       </div>
+      {preview && <PreviewDialog key={preview.id} entry={{ name: preview.name, path: preview.id, kind: 'file', size: preview.size, modified: null, mime: preview.mime }}
+        previewUrl={preview.previewUrl} downloadUrl={preview.downloadUrl} onClose={() => setPreview(null)} />}
     </aside>
   );
 }

@@ -1,4 +1,5 @@
 mod cli;
+mod shutdown;
 
 use std::{error::Error, io, net::Ipv4Addr};
 
@@ -29,9 +30,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             )
         })?;
 
+    let signals = shutdown::Signals::new()?;
     println!("Sharing {}", directory.display());
     println!("API server listening on http://{}", listener.local_addr()?);
-    axum::serve(listener, create_app(directory)).await?;
+    shutdown::serve(listener, create_app(directory), signals).await?;
 
+    // Returning shuts down Tokio and drops Axum's spawned connection tasks,
+    // including pending upload/download owners. process::exit would skip cleanup.
     Ok(())
 }
