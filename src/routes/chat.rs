@@ -8,7 +8,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 
-use crate::state::{AppState, ChatMessage};
+use crate::state::{AppState, ChatEvent, ChatMessage};
 
 pub(crate) mod attachments;
 
@@ -44,13 +44,26 @@ const MAX_CHAT_MESSAGE_LENGTH: usize = 10_000;
 #[serde(tag = "type", rename_all = "lowercase")]
 enum ClientEvent {
     Send { text: String },
+    Clear,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum ServerEvent {
-    History { messages: Vec<ChatMessage> },
-    Message { message: ChatMessage },
+    History {
+        messages: Vec<ChatMessage>,
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
+    Message {
+        message: ChatMessage,
+    },
+    Cleared {
+        #[serde(rename = "throughId")]
+        through_id: u64,
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
 }
 
 pub async fn chat_socket(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
@@ -60,10 +73,17 @@ pub async fn chat_socket(ws: WebSocketUpgrade, State(state): State<AppState>) ->
 async fn handle_socket(socket: WebSocket, state: AppState) {
     let mut updates = state.chat.subscribe();
     let history = state.chat.history().await;
+    let session_id = state.chat.session_id().to_owned();
     let (mut sender, mut incoming) = socket.split();
-    if send_event(&mut sender, ServerEvent::History { messages: history })
-        .await
-        .is_err()
+    if send_event(
+        &mut sender,
+        ServerEvent::History {
+            messages: history,
+            session_id: session_id.clone(),
+        },
+    )
+    .await
+    .is_err()
     {
         return;
     }
@@ -71,8 +91,22 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     loop {
         tokio::select! {
             update = updates.recv() => match update {
-                Ok(message) => {
+                Ok(ChatEvent::Message(message)) => {
                     if send_event(&mut sender, ServerEvent::Message { message }).await.is_err() { break; }
+                }
+                Ok(ChatEvent::Cleared { through_id }) => {
+                    if send_event(
+                        &mut sender,
+                        ServerEvent::Cleared {
+                            through_id,
+                            session_id: state.chat.session_id().to_owned(),
+                        },
+                    )
+                    .await
+                    .is_err()
+                    {
+                        break;
+                    }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -88,14 +122,21 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 }
 
 async fn handle_client_event(state: &AppState, text: &str) {
-    let Ok(ClientEvent::Send { text }) = serde_json::from_str(text) else {
+    let Ok(event) = serde_json::from_str(text) else {
         return;
     };
-    let text = text.trim();
-    if text.is_empty() || text.chars().count() > MAX_CHAT_MESSAGE_LENGTH {
-        return;
+    match event {
+        ClientEvent::Send { text } => {
+            let text = text.trim();
+            if text.is_empty() || text.chars().count() > MAX_CHAT_MESSAGE_LENGTH {
+                return;
+            }
+            state.chat.add_message(text.to_owned()).await;
+        }
+        ClientEvent::Clear => {
+            state.chat.clear_history().await;
+        }
     }
-    state.chat.add_message(text.to_owned()).await;
 }
 
 async fn send_event(

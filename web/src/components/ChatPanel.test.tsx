@@ -11,7 +11,9 @@ class SocketMock {
   onopen?: () => void;
   onclose?: () => void;
   onmessage?: (event: { data: string }) => void;
+  sent: string[] = [];
   close() {}
+  send(data: string) { this.sent.push(data); }
   constructor() { SocketMock.instances.push(this); }
   open() { this.readyState = 1; this.onopen?.(); }
   receive(data: unknown) { this.onmessage?.({ data: JSON.stringify(data) }); }
@@ -288,6 +290,73 @@ describe('chat drafts and confirmed submission', () => {
 });
 
 describe('chat history and media', () => {
+  function setScrollLayout(element: HTMLElement, scrollHeight: number, clientHeight: number, scrollTop = 0) {
+    Object.defineProperty(element, 'scrollHeight', { configurable: true, value: scrollHeight });
+    Object.defineProperty(element, 'clientHeight', { configurable: true, value: clientHeight });
+    Object.defineProperty(element, 'scrollTop', { configurable: true, writable: true, value: scrollTop });
+  }
+
+  it('starts at the latest history and follows new messages while near the bottom', () => {
+    const socket = start();
+    const list = screen.getByRole('log', { name: '聊天消息' });
+    setScrollLayout(list, 1000, 300);
+    act(() => socket.receive({ type: 'history', messages: [message('old'), message('latest', [], 2)] }));
+    expect(list.scrollTop).toBe(700);
+    Object.defineProperty(list, 'scrollTop', { configurable: true, writable: true, value: 660 });
+    fireEvent.scroll(list);
+    act(() => socket.receive({ type: 'message', message: message('newest', [], 3) }));
+    expect(list.scrollTop).toBe(700);
+  });
+
+  it('keeps the reading position and offers a jump button when scrolled up', () => {
+    const socket = start();
+    const list = screen.getByRole('log', { name: '聊天消息' });
+    setScrollLayout(list, 1000, 300);
+    act(() => socket.receive({ type: 'history', messages: [message('old')] }));
+    Object.defineProperty(list, 'scrollTop', { configurable: true, writable: true, value: 200 });
+    fireEvent.scroll(list);
+    act(() => socket.receive({ type: 'message', message: message('newest', [], 2) }));
+    expect(list.scrollTop).toBe(200);
+    expect(screen.getByRole('button', { name: '跳转到底部' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '跳转到底部' }));
+    expect(list.scrollTop).toBe(700);
+    expect(screen.queryByRole('button', { name: '跳转到底部' })).not.toBeInTheDocument();
+  });
+
+  it('scrolls to the latest position after its own message is confirmed', async () => {
+    const socket = start();
+    const list = screen.getByRole('log', { name: '聊天消息' });
+    setScrollLayout(list, 1000, 300);
+    fetchMock.mockResolvedValue(response(message('sent from this device')));
+    text('sent from this device');
+    await send();
+    expect(socket.sent).toHaveLength(0);
+    expect(list.scrollTop).toBe(700);
+    expect(screen.getByText('sent from this device')).toBeInTheDocument();
+  });
+
+  it('requests shared history clearing and preserves the current draft', () => {
+    const socket = start();
+    act(() => socket.receive({ type: 'history', messages: [message('old')] }));
+    text('keep this draft'); choose(file());
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    fireEvent.click(screen.getByRole('button', { name: '清空消息' }));
+    expect(socket.sent).toContain(JSON.stringify({ type: 'clear' }));
+    expect(screen.getByText('old')).toBeInTheDocument();
+    act(() => socket.receive({ type: 'cleared', throughId: 1 }));
+    expect(screen.queryByText('old')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toHaveValue('keep this draft');
+    expect(screen.getByText('照片.png')).toBeInTheDocument();
+  });
+
+  it('resets the clear boundary when a restarted server uses a new chat session', () => {
+    const socket = start();
+    act(() => socket.receive({ type: 'history', sessionId: 'old-session', messages: [message('old', [], 5)] }));
+    act(() => socket.receive({ type: 'cleared', sessionId: 'old-session', throughId: 5 }));
+    act(() => socket.receive({ type: 'history', sessionId: 'new-session', messages: [message('after restart', [], 1)] }));
+    expect(screen.getByText('after restart')).toBeInTheDocument();
+  });
+
   it('deduplicates HTTP responses and WebSocket history/events in either order', async () => {
     const socket = start(); text('hello'); await send();
     act(() => socket.receive({ type: 'history', messages: [] }));

@@ -47,6 +47,12 @@ pub struct ChatMessage {
     pub attachments: Vec<ChatAttachment>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ChatEvent {
+    Message(ChatMessage),
+    Cleared { through_id: u64 },
+}
+
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct MessageRequest {
@@ -205,9 +211,10 @@ struct ChatData {
 
 pub struct ChatState {
     root: Arc<PathBuf>,
+    session_id: String,
     directory: OnceCell<Arc<TempDir>>,
     data: Mutex<ChatData>,
-    sender: broadcast::Sender<ChatMessage>,
+    sender: broadcast::Sender<ChatEvent>,
     cleanup_started: AtomicBool,
     cleanup_changed: Arc<Notify>,
 }
@@ -217,6 +224,7 @@ impl ChatState {
         let (sender, _) = broadcast::channel(MAX_CHAT_MESSAGES * 2);
         Self {
             root,
+            session_id: uuid::Uuid::new_v4().to_string(),
             directory: OnceCell::new(),
             data: Mutex::new(ChatData::default()),
             sender,
@@ -225,8 +233,12 @@ impl ChatState {
         }
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<ChatMessage> {
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<ChatEvent> {
         self.sender.subscribe()
+    }
+
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
     }
 
     pub async fn history(&self) -> Vec<ChatMessage> {
@@ -471,6 +483,22 @@ impl ChatState {
         self.publish(&mut data, text, vec![])
     }
 
+    pub async fn clear_history(&self) -> u64 {
+        let mut data = self.data.lock().await;
+        let through_id = data
+            .messages
+            .back()
+            .map_or(data.next_id, |message| message.id);
+        let messages = std::mem::take(&mut data.messages);
+        for message in messages {
+            release_message_files(&mut data, message.attachments);
+        }
+        let _ = self.sender.send(ChatEvent::Cleared { through_id });
+        drop(data);
+        self.cleanup_changed.notify_one();
+        through_id
+    }
+
     fn publish(
         &self,
         data: &mut ChatData,
@@ -490,16 +518,9 @@ impl ChatState {
         data.messages.push_back(message.clone());
         if data.messages.len() > MAX_CHAT_MESSAGES {
             let old = data.messages.pop_front().expect("history exceeded limit");
-            for attachment in old.attachments {
-                if let Some(entry) = data.attachments.get_mut(&attachment.id) {
-                    entry.references -= 1;
-                    if !entry.is_retained(Instant::now()) {
-                        data.attachments.remove(&attachment.id);
-                    }
-                }
-            }
+            release_message_files(data, old.attachments);
         }
-        let _ = self.sender.send(message.clone());
+        let _ = self.sender.send(ChatEvent::Message(message.clone()));
         message
     }
 
@@ -597,6 +618,17 @@ fn release_draft_files(data: &mut ChatData, ids: Vec<String>) {
     }
 }
 
+fn release_message_files(data: &mut ChatData, attachments: Vec<ChatAttachment>) {
+    for attachment in attachments {
+        if let Some(entry) = data.attachments.get_mut(&attachment.id) {
+            entry.references = entry.references.saturating_sub(1);
+            if !entry.is_retained(Instant::now()) {
+                data.attachments.remove(&attachment.id);
+            }
+        }
+    }
+}
+
 fn expire_records(data: &mut ChatData) {
     let now = Instant::now();
     let expired: Vec<_> = data
@@ -649,13 +681,71 @@ mod tests {
         let mut receiver = state.subscribe();
         let message = state.add_message("hello".into()).await;
         assert!(message.attachments.is_empty());
-        assert_eq!(receiver.recv().await.unwrap(), message);
+        assert_eq!(
+            receiver.recv().await.unwrap(),
+            ChatEvent::Message(message.clone())
+        );
         for index in 0..MAX_CHAT_MESSAGES {
             state.add_message(index.to_string()).await;
         }
         let history = state.history().await;
         assert_eq!(history.len(), MAX_CHAT_MESSAGES);
         assert_eq!(history[0].text, "0");
+    }
+
+    #[tokio::test]
+    async fn clears_history_releases_published_files_and_keeps_ids_monotonic() {
+        let (_root, state) = state();
+        let (attachment, path) = upload(&state).await;
+        let mut receiver = state.subscribe();
+        let message = state
+            .submit(request(&state, "clear", &[&attachment.id]).await)
+            .await
+            .unwrap();
+        assert_eq!(
+            receiver.recv().await.unwrap(),
+            ChatEvent::Message(message.clone())
+        );
+
+        let through_id = state.clear_history().await;
+        assert_eq!(through_id, message.id);
+        assert!(state.history().await.is_empty());
+        assert_eq!(
+            receiver.recv().await.unwrap(),
+            ChatEvent::Cleared {
+                through_id: message.id
+            }
+        );
+        assert!(matches!(
+            state.attachment(&attachment.id).await,
+            Err(ChatError::NotFound)
+        ));
+        assert!(!path.exists());
+
+        let next = state.add_message("after clear".into()).await;
+        assert!(next.id > through_id);
+    }
+
+    #[tokio::test]
+    async fn clearing_history_keeps_files_pinned_by_an_active_draft() {
+        let (_root, state) = state();
+        let (attachment, path) = upload(&state).await;
+        let prepared = state.prepare("draft-clear".into()).await.unwrap();
+        state
+            .keep_alive(KeepAliveRequest {
+                client_message_id: "draft-clear".into(),
+                submission_token: prepared.submission_token,
+                attachment_ids: vec![attachment.id.clone()],
+            })
+            .await
+            .unwrap();
+        state.add_message("old history".into()).await;
+
+        state.clear_history().await;
+
+        assert!(state.history().await.is_empty());
+        assert!(state.attachment(&attachment.id).await.is_ok());
+        assert!(path.exists());
     }
 
     #[tokio::test]
@@ -670,7 +760,10 @@ mod tests {
         let first = first.unwrap();
         assert_eq!(retry.unwrap(), first);
         assert_eq!(first.attachments, vec![attachment.clone()]);
-        assert_eq!(receiver.recv().await.unwrap(), first);
+        assert_eq!(
+            receiver.recv().await.unwrap(),
+            ChatEvent::Message(first.clone())
+        );
         assert!(receiver.try_recv().is_err());
         assert!(matches!(
             state.submit(request(&state, "client-1", &[]).await).await,

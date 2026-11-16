@@ -222,6 +222,7 @@ try {
     });
     const history = await nextEvent();
     assert.equal(history.type, 'history');
+    assert.equal(typeof history.sessionId, 'string');
     assert.deepEqual(history.messages, []);
     socket.send(JSON.stringify({ type: 'send', text: 'release smoke test' }));
     const textEvent = await nextEvent();
@@ -294,6 +295,25 @@ try {
       assert.deepEqual(retained.messages[1], mediaMessage);
     } finally { reconnect.close(); }
     assert.equal(queue.length, 0, 'An idempotent retry must not broadcast another message');
+    socket.send(JSON.stringify({ type: 'clear' }));
+    const cleared = await nextEvent();
+    assert.equal(cleared.type, 'cleared');
+    assert.equal(cleared.sessionId, history.sessionId);
+    assert.equal(cleared.throughId, mediaMessage.id);
+    const removedAttachment = await request(attachment.previewUrl);
+    assert.equal(removedAttachment.status, 404);
+    await removedAttachment.arrayBuffer();
+    const afterClear = new WebSocket(`${origin.replace('http:', 'ws:')}/api/chat`);
+    try {
+      const emptyHistory = await new Promise((resolveHistory, reject) => {
+        const timer = setTimeout(() => reject(new Error('Clear history reconnect timed out')), 10_000);
+        afterClear.onerror = () => { clearTimeout(timer); reject(new Error('Clear history reconnect failed')); };
+        afterClear.onmessage = ({ data }) => { clearTimeout(timer); resolveHistory(JSON.parse(data)); };
+      });
+      assert.equal(emptyHistory.type, 'history');
+      assert.equal(emptyHistory.sessionId, history.sessionId);
+      assert.deepEqual(emptyHistory.messages, []);
+    } finally { afterClear.close(); }
   } finally {
     socket.close();
   }
@@ -304,7 +324,7 @@ try {
     await verifyShutdown(executable, share);
     console.log('Shutdown passed: active upload completion, second Ctrl+C, grace timeout, temporary upload/archive cleanup.');
   }
-  console.log('Standalone binary passed: embedded HTML/JS/CSS, HEAD, SPA, API 404, health, files, chat text/media broadcast, idempotent submission, attachment download and Range.');
+  console.log('Standalone binary passed: embedded HTML/JS/CSS, HEAD, SPA, API 404, health, files, chat text/media broadcast, shared chat clearing, idempotent submission, attachment download and Range.');
   completed = true;
 } catch (error) {
   console.error(output);

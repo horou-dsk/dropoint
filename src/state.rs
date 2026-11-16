@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 mod chat;
 pub use chat::{ChatAttachment, ChatMessage, ChatState, MAX_CHAT_MESSAGES};
 pub(crate) use chat::{
-    ChatError, KeepAliveRequest, MessageRequest, PrepareMessageRequest, PreparedMessage,
+    ChatError, ChatEvent, KeepAliveRequest, MessageRequest, PrepareMessageRequest, PreparedMessage,
 };
 
 #[derive(Clone)]

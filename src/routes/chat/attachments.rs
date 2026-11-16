@@ -345,7 +345,10 @@ mod tests {
         let message = json(response).await;
         assert_eq!(message["text"], "");
         assert_eq!(message["attachments"][0], metadata);
-        let broadcast = receiver.recv().await.unwrap();
+        let broadcast = match receiver.recv().await.unwrap() {
+            crate::state::ChatEvent::Message(message) => message,
+            crate::state::ChatEvent::Cleared { .. } => panic!("message event expected"),
+        };
         assert_eq!(broadcast.id, message["id"].as_u64().unwrap());
         assert_eq!(state.chat.history().await, vec![broadcast]);
         let url = format!("/{id}/preview");
