@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
+import { MAX_UPLOAD_FILE_SIZE_BYTES } from './lib/api';
 import { mockUploadRequests, UploadRequestMock } from './test/UploadRequestMock';
 
 const folder = { name: 'Folder', path: 'Folder', kind: 'directory', size: 0, modified: null, mime: null };
@@ -35,6 +36,16 @@ async function start(files: File[]) {
 }
 
 describe('upload progress UI', () => {
+  it('rejects an oversized file before creating an upload request', async () => {
+    const oversized = file('huge.bin', 1);
+    Object.defineProperty(oversized, 'size', { configurable: true, value: MAX_UPLOAD_FILE_SIZE_BYTES + 1 });
+    render(<App />);
+    await screen.findByRole('button', { name: 'Folder' });
+    fireEvent.change(screen.getByLabelText('上传文件', { selector: 'input' }), { target: { files: [oversized] } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('超过单文件 5 GiB 限制');
+    expect(UploadRequestMock.requests).toHaveLength(0);
+  });
+
   it('shows byte-weighted total progress and only finishes after server confirmation', async () => {
     const first = await start([file('one.txt', 100), file('two.txt', 300)]);
     act(() => first.progress(50, 100));

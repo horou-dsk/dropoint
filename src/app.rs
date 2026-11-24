@@ -35,11 +35,11 @@ pub fn create_app(root: PathBuf) -> Router {
         .route("/api/files/archive/{id}", get(download_archive))
         .route("/api/files/delete", post(delete_files))
         .route("/api/chat", get(chat_socket))
-        .layer(DefaultBodyLimit::max(1024 * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(crate::routes::MAX_UPLOAD_BODY_SIZE))
         .route(
             "/api/chat/attachments",
             post(crate::routes::chat::attachments::upload)
-                .layer(DefaultBodyLimit::max(1024 * 1024 * 1024)),
+                .layer(DefaultBodyLimit::max(crate::routes::MAX_UPLOAD_BODY_SIZE)),
         )
         .route(
             "/api/chat/attachments/{id}/preview",

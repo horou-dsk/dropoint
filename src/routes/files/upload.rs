@@ -13,6 +13,7 @@ use tempfile::TempPath;
 use tokio::io::AsyncWriteExt;
 
 use super::{FileError, ensure_inside, relative_string, safe_relative_path};
+use crate::routes::MAX_UPLOAD_FILE_SIZE;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -145,8 +146,15 @@ pub async fn upload_file(
                     while let Some(chunk) =
                         field.chunk().await.map_err(|_| FileError::InvalidUpload)?
                     {
+                        let next_size = upload
+                            .size
+                            .checked_add(chunk.len() as u64)
+                            .ok_or(FileError::PayloadTooLarge)?;
+                        if next_size > MAX_UPLOAD_FILE_SIZE {
+                            return Err(FileError::PayloadTooLarge);
+                        }
                         file.write_all(&chunk).await?;
-                        upload.size += chunk.len() as u64;
+                        upload.size = next_size;
                     }
                     file.flush().await?;
                     Ok::<(), FileError>(())

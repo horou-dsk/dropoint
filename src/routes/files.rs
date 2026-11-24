@@ -70,6 +70,7 @@ pub enum FileError {
     NotFound,
     Conflict(String),
     InvalidUpload,
+    PayloadTooLarge,
     InvalidOperation(String),
     OperationFailed(String),
     Io(std::io::Error),
@@ -103,6 +104,11 @@ impl IntoResponse for FileError {
                 StatusCode::BAD_REQUEST,
                 "invalid_upload",
                 "上传内容无效".to_owned(),
+            ),
+            Self::PayloadTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "file_too_large",
+                "单个文件不能超过 5 GiB".to_owned(),
             ),
             Self::InvalidOperation(message) => {
                 (StatusCode::BAD_REQUEST, "invalid_operation", message)

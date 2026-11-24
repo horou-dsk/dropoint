@@ -7,6 +7,8 @@ import {
   checkUploadConflict,
   getDirectoryInfo,
   listFiles,
+  MAX_UPLOAD_FILE_SIZE_BYTES,
+  MAX_UPLOAD_FILE_SIZE_LABEL,
   uploadFile,
   createArchive,
   deleteFiles,
@@ -198,6 +200,15 @@ export default function App() {
     try {
       const files = await source;
       if (!files.length) return;
+      const oversized = files.filter((item) => item.file.size > MAX_UPLOAD_FILE_SIZE_BYTES);
+      if (oversized.length > 0) {
+        const names = oversized.map((item) => item.relativePath).join('、');
+        setOperation({
+          error: true,
+          text: `未开始上传：${names}超过单文件 ${MAX_UPLOAD_FILE_SIZE_LABEL} 限制`,
+        });
+        return;
+      }
       const totalBytes = files.reduce((total, item) => total + item.file.size, 0);
       uploadBatch: for (let index = 0; index < files.length; index += 1) {
         const file = files[index];

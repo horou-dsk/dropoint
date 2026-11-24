@@ -1,5 +1,12 @@
 import type { UploadItem } from './uploads';
 
+export const MAX_UPLOAD_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024;
+export const MAX_UPLOAD_FILE_SIZE_LABEL = '5 GiB';
+
+export function uploadSizeError(fileName: string): Error {
+  return new Error(`文件「${fileName}」超过单文件 ${MAX_UPLOAD_FILE_SIZE_LABEL} 限制`);
+}
+
 export type HealthResponse = {
   status: 'ok';
 };
@@ -128,6 +135,7 @@ export function uploadFile(
   conflict: ConflictMode | 'fail' = 'fail',
   onProgress?: (progress: UploadProgress) => void,
 ): Promise<{ path: string; size: number }> {
+  if (file.size > MAX_UPLOAD_FILE_SIZE_BYTES) return Promise.reject(uploadSizeError(file.name));
   const query = new URLSearchParams();
   if (destination) query.set('path', destination);
   if (conflict !== 'fail') query.set('conflict', conflict);
@@ -179,6 +187,7 @@ function uploadMultipart<T>(file: File, url: string, form: FormData, decode: (st
 }
 
 export function uploadChatAttachment(file: File, onProgress?: (progress: UploadProgress) => void, signal?: AbortSignal): Promise<ChatAttachment> {
+  if (file.size > MAX_UPLOAD_FILE_SIZE_BYTES) return Promise.reject(uploadSizeError(file.name));
   const form = new FormData();
   form.append('file', file, file.name);
   return uploadMultipart(file, '/api/chat/attachments', form, (status, body) => {

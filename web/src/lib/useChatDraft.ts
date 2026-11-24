@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChatApiError, keepChatMessageAlive, prepareChatMessage, submitChatMessage, uploadChatAttachment,
+  MAX_UPLOAD_FILE_SIZE_BYTES, MAX_UPLOAD_FILE_SIZE_LABEL,
   type ChatAttachment, type ChatMessage, type ChatSubmission } from './api';
 import type { UploadStatus } from '../components/UploadProgress';
 
@@ -47,9 +48,14 @@ export function useChatDraft(confirm: (message: ChatMessage) => void) {
   const addFiles = (incoming: File[]) => {
     if (pending.current || incoming.length === 0) return;
     const available = MAX_CHAT_ATTACHMENTS - files.current.length;
-    const selected = incoming.slice(0, available).map((file) => ({ key: newClientMessageId(), file, preview: imagePreview(file) }));
+    const oversized = incoming.filter((file) => file.size > MAX_UPLOAD_FILE_SIZE_BYTES);
+    const eligible = incoming.filter((file) => file.size <= MAX_UPLOAD_FILE_SIZE_BYTES);
+    const selected = eligible.slice(0, available).map((file) => ({ key: newClientMessageId(), file, preview: imagePreview(file) }));
     if (selected.length) { updateFiles([...files.current, ...selected]); newSubmission(); }
-    setError(incoming.length > available ? '每条消息最多添加 10 个附件' : '');
+    const errors = [];
+    if (oversized.length) errors.push(`超过单文件 ${MAX_UPLOAD_FILE_SIZE_LABEL} 限制：${oversized.map((file) => file.name).join('、')}`);
+    if (eligible.length > available) errors.push('每条消息最多添加 10 个附件');
+    setError(errors.join('；'));
   };
   const remove = (key: string) => {
     if (pending.current) return;

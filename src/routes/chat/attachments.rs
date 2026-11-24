@@ -12,6 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 
 use crate::{
+    routes::MAX_UPLOAD_FILE_SIZE,
     routes::files::range::{self, Selection},
     state::{AppState, ChatAttachment, ChatError},
 };
@@ -31,10 +32,16 @@ pub(crate) async fn upload(
     let mime = safe_mime(&name);
     let temporary = state.chat.begin_upload().await?;
     let mut writer = tokio::fs::File::from_std(temporary.file.reopen()?);
-    let mut size = 0;
+    let mut size: u64 = 0;
     while let Some(chunk) = field.chunk().await? {
+        let next_size = size
+            .checked_add(chunk.len() as u64)
+            .ok_or_else(upload_too_large)?;
+        if next_size > MAX_UPLOAD_FILE_SIZE {
+            return Err(upload_too_large());
+        }
         writer.write_all(&chunk).await?;
-        size += chunk.len() as u64;
+        size = next_size;
     }
     drop(field);
     // Publish only after the entire multipart envelope is validated.
@@ -142,6 +149,13 @@ async fn serve(
 
 fn invalid_upload(message: &str) -> ChatError {
     ChatError::Upload(StatusCode::BAD_REQUEST, message.into())
+}
+
+fn upload_too_large() -> ChatError {
+    ChatError::Upload(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "单个文件不能超过 5 GiB".into(),
+    )
 }
 
 fn display_name(name: &str) -> String {

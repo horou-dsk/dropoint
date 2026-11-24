@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatPanel from './ChatPanel';
+import { MAX_UPLOAD_FILE_SIZE_BYTES } from '../lib/api';
 import type { ChatAttachment, ChatMessage } from '../lib/api';
 import { mockUploadRequests, UploadRequestMock } from '../test/UploadRequestMock';
 
@@ -66,6 +67,17 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('chat drafts and confirmed submission', () => {
+  it('rejects an oversized attachment before creating an upload request', () => {
+    const socket = start();
+    const oversized = file('huge.bin', 1, 'application/octet-stream');
+    Object.defineProperty(oversized, 'size', { configurable: true, value: MAX_UPLOAD_FILE_SIZE_BYTES + 1 });
+    choose(oversized);
+    expect(screen.getByRole('alert')).toHaveTextContent('超过单文件 5 GiB 限制');
+    expect(screen.queryByText('huge.bin')).not.toBeInTheDocument();
+    expect(UploadRequestMock.requests).toHaveLength(0);
+    expect(socket.sent).toHaveLength(0);
+  });
+
   it('keeps connecting drafts and clears text only after HTTP confirmation', async () => {
     let confirm!: (value: unknown) => void;
     fetchMock.mockReturnValue(new Promise((resolve) => { confirm = resolve; }));
